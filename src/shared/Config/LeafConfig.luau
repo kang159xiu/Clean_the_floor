@@ -1,0 +1,207 @@
+local LeafConfig = {
+	ActiveOrder = {
+		"Leaf1",
+		"Leaf2",
+		"Leaf3",
+		"Leaf4",
+		"Leaf5",
+		"Leaf6",
+		"Leaf7",
+		"Leaf8",
+		"Leaf9",
+		"Leaf10",
+		"Leaf11",
+		"Leaf12",
+		"Leaf13",
+		"Leaf14",
+		"Leaf15",
+		"Leaf16",
+	},
+	Order = {
+		"Leaf1",
+		"Leaf2",
+		"Leaf3",
+		"Leaf4",
+		"Leaf5",
+		"Leaf6",
+		"Leaf7",
+		"Leaf8",
+		"Leaf9",
+		"Leaf10",
+		"Leaf11",
+		"Leaf12",
+		"Leaf13",
+		"Leaf14",
+		"Leaf15",
+		"Leaf16",
+		"Leaf17",
+		"Leaf18",
+	},
+	Types = {
+		Leaf1 = {
+			BagValue = 1,
+			Image = "rbxassetid://99223157190429",
+		},
+		Leaf2 = {
+			BagValue = 1,
+			Image = "rbxassetid://129800048670364",
+		},
+		Leaf3 = {
+			BagValue = 1,
+			Image = "rbxassetid://129800048670364",
+		},
+		Leaf4 = {
+			BagValue = 1,
+			Image = "rbxassetid://119855433509801",
+		},
+		Leaf5 = {
+			BagValue = 1,
+			Image = "rbxassetid://119855433509801",
+		},
+		Leaf6 = {
+			BagValue = 1,
+			Image = "rbxassetid://106245104361216",
+		},
+		Leaf7 = {
+			BagValue = 1,
+			Image = "rbxassetid://106245104361216",
+		},
+		Leaf8 = {
+			BagValue = 1,
+			Image = "rbxassetid://91646333993574",
+		},
+		Leaf9 = {
+			BagValue = 1,
+			Image = "rbxassetid://99223157190429",
+		},
+		Leaf10 = {
+			BagValue = 1,
+			Image = "rbxassetid://99223157190429",
+		},
+		Leaf11 = {
+			BagValue = 1,
+			Image = "rbxassetid://129800048670364",
+		},
+		Leaf12 = {
+			BagValue = 1,
+			Image = "rbxassetid://129800048670364",
+		},
+		Leaf13 = {
+			BagValue = 1,
+			Image = "rbxassetid://119855433509801",
+		},
+		Leaf14 = {
+			BagValue = 1,
+			Image = "rbxassetid://119855433509801",
+		},
+		Leaf15 = {
+			BagValue = 1,
+			Image = "rbxassetid://106245104361216",
+		},
+		Leaf16 = {
+			BagValue = 1,
+			Image = "rbxassetid://91646333993574",
+		},
+		Leaf17 = {
+			BagValue = 1,
+			Image = "rbxassetid://82851461247886",
+		},
+		Leaf18 = {
+			BagValue = 1,
+			Image = "rbxassetid://113207269763447",
+		},
+	},
+	AreaPools = {
+		Lobby = {
+			{ LeafType = "Leaf1", SpawnWeight = 1 },
+			{ LeafType = "Leaf2", SpawnWeight = 1 },
+			{ LeafType = "Leaf3", SpawnWeight = 1 },
+			{ LeafType = "Leaf4", SpawnWeight = 1 },
+			{ LeafType = "Leaf5", SpawnWeight = 1 },
+			{ LeafType = "Leaf6", SpawnWeight = 1 },
+			{ LeafType = "Leaf7", SpawnWeight = 1 },
+			{ LeafType = "Leaf8", SpawnWeight = 1 },
+			{ LeafType = "Leaf9", SpawnWeight = 1 },
+			{ LeafType = "Leaf10", SpawnWeight = 1 },
+			{ LeafType = "Leaf11", SpawnWeight = 1 },
+			{ LeafType = "Leaf12", SpawnWeight = 1 },
+			{ LeafType = "Leaf13", SpawnWeight = 1 },
+			{ LeafType = "Leaf14", SpawnWeight = 1 },
+			{ LeafType = "Leaf15", SpawnWeight = 1 },
+			{ LeafType = "Leaf16", SpawnWeight = 1 },
+		},
+		Area_01 = {
+			{ LeafType = "Leaf1", SpawnWeight = 70 },
+			{ LeafType = "Leaf2", SpawnWeight = 30 },
+		},
+		Area_02 = {
+			{ LeafType = "Leaf3", SpawnWeight = 70 },
+			{ LeafType = "Leaf4", SpawnWeight = 30 },
+		},
+		Area_03 = {
+			{ LeafType = "Leaf5", SpawnWeight = 70 },
+			{ LeafType = "Leaf6", SpawnWeight = 30 },
+		},
+		Area_04 = {
+			{ LeafType = "Leaf7", SpawnWeight = 70 },
+			{ LeafType = "Leaf8", SpawnWeight = 30 },
+		},
+		Area_05 = {
+			{ LeafType = "Leaf9", SpawnWeight = 70 },
+			{ LeafType = "Leaf10", SpawnWeight = 30 },
+		},
+		Area_06 = {
+			{ LeafType = "Leaf11", SpawnWeight = 70 },
+			{ LeafType = "Leaf12", SpawnWeight = 30 },
+		},
+		Area_07 = {
+			{ LeafType = "Leaf13", SpawnWeight = 70 },
+			{ LeafType = "Leaf14", SpawnWeight = 30 },
+		},
+		Area_08 = {
+			{ LeafType = "Leaf15", SpawnWeight = 70 },
+			{ LeafType = "Leaf16", SpawnWeight = 30 },
+		},
+		Area_09 = {
+			{ LeafType = "Leaf17", SpawnWeight = 70 },
+			{ LeafType = "Leaf18", SpawnWeight = 30 },
+		},
+	},
+	Lobby = {
+		AreaId = "Lobby",
+		ContainerName = "大厅装扮",
+		GroundName = "ground",
+		LeafCount = 600,
+		Seed = 618_033,
+		RespawnDelay = 0.35,
+		EdgePadding = 0.5,
+		LeafHeightJitterMin = 0.05,
+		LeafHeightJitterMax = 0.6,
+	},
+	Placement = {
+		MaxAttempts = 12,
+		BoundsInset = 0.02,
+		MinimumQuerySize = 0.01,
+		MaximumPitchDegrees = 8,
+		MaximumRollDegrees = 8,
+	},
+	Population = {
+		MaximumActiveLeaves = 2000,
+		RefillWorkBatchSize = 20,
+		RefillBatchInterval = 0.1,
+		RefillRetryInterval = 0.05,
+		RefillPreparedPositionTarget = 200,
+		RefillPreparationAttemptsPerHeartbeat = 4,
+	},
+	Motion = {
+		ServerSimulationStep = 0.05,
+		ReplicationInterval = 0.1,
+		ClientVisualStep = 1 / 30,
+		CorrectionDuration = 0.15,
+		MaximumPredictionSeconds = 0.55,
+		SpatialBoundsUpdateInterval = 0.1,
+		Damping = 6,
+	},
+}
+
+return table.freeze(LeafConfig)
