@@ -4,7 +4,7 @@
 
 本文件是新对话接手项目时的第一入口。当前事实以Rojo源码、Studio对象和[阶段2当前交接](docs/08_STAGE_2_CURRENT_STATUS.md)为准；[阶段1交接](docs/07_STAGE_1_HANDOFF.md)只保留历史记录。
 
-## 当前仓库
+## 当前仓库--
 
 - Rojo配置：`default.project.json`
 - 客户端入口：`src/client/init.client.luau`
