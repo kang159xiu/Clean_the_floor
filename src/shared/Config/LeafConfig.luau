@@ -40,31 +40,31 @@ local LeafConfig = {
 	Types = {
 		Leaf1 = {
 			BagValue = 1,
-			Image = "rbxassetid://99223157190429",
+			Image = "rbxassetid://136326294168773",
 		},
 		Leaf2 = {
 			BagValue = 1,
-			Image = "rbxassetid://129800048670364",
+			Image = "rbxassetid://94072909898587",
 		},
 		Leaf3 = {
 			BagValue = 1,
-			Image = "rbxassetid://129800048670364",
+			Image = "rbxassetid://113580447972571",
 		},
 		Leaf4 = {
 			BagValue = 1,
-			Image = "rbxassetid://119855433509801",
+			Image = "rbxassetid://102386196066113",
 		},
 		Leaf5 = {
 			BagValue = 1,
-			Image = "rbxassetid://119855433509801",
+			Image = "rbxassetid://135834649204684",
 		},
 		Leaf6 = {
 			BagValue = 1,
-			Image = "rbxassetid://106245104361216",
+			Image = "rbxassetid://115166085573039",
 		},
 		Leaf7 = {
 			BagValue = 1,
-			Image = "rbxassetid://106245104361216",
+			Image = "rbxassetid://117248907152127",
 		},
 		Leaf8 = {
 			BagValue = 1,
@@ -72,35 +72,35 @@ local LeafConfig = {
 		},
 		Leaf9 = {
 			BagValue = 1,
-			Image = "rbxassetid://99223157190429",
+			Image = "rbxassetid://103758240678217",
 		},
 		Leaf10 = {
 			BagValue = 1,
-			Image = "rbxassetid://99223157190429",
+			Image = "rbxassetid://72952092128188",
 		},
 		Leaf11 = {
 			BagValue = 1,
-			Image = "rbxassetid://129800048670364",
+			Image = "rbxassetid://101502165995169",
 		},
 		Leaf12 = {
 			BagValue = 1,
-			Image = "rbxassetid://129800048670364",
+			Image = "rbxassetid://87248899053177",
 		},
 		Leaf13 = {
 			BagValue = 1,
-			Image = "rbxassetid://119855433509801",
+			Image = "rbxassetid://88010989302118",
 		},
 		Leaf14 = {
 			BagValue = 1,
-			Image = "rbxassetid://119855433509801",
+			Image = "rbxassetid://136053103494442",
 		},
 		Leaf15 = {
 			BagValue = 1,
-			Image = "rbxassetid://106245104361216",
+			Image = "rbxassetid://82851461247886",
 		},
 		Leaf16 = {
 			BagValue = 1,
-			Image = "rbxassetid://91646333993574",
+			Image = "rbxassetid://113207269763447",
 		},
 		Leaf17 = {
 			BagValue = 1,
@@ -172,8 +172,9 @@ local LeafConfig = {
 		ContainerName = "大厅装扮",
 		GroundName = "ground",
 		LeafCount = 600,
+		BagValue = 1,
 		Seed = 618_033,
-		RespawnDelay = 0.35,
+		RespawnDelay = 0.1,
 		EdgePadding = 0.5,
 		LeafHeightJitterMin = 0.05,
 		LeafHeightJitterMax = 0.6,

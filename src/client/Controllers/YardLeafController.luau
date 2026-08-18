@@ -510,7 +510,12 @@ function YardLeafController:_ensureFolder(areaId)
 	if folder and folder.Parent then
 		return folder
 	end
-	local area = Workspace:WaitForChild(areaId)
+	local area
+	if areaId == LeafConfig.Lobby.AreaId then
+		area = Workspace:WaitForChild(LeafConfig.Lobby.ContainerName)
+	else
+		area = Workspace:WaitForChild(areaId)
+	end
 	folder = area:FindFirstChild("GeneratedLeaves")
 	if not folder then
 		folder = Instance.new("Folder")
@@ -870,17 +875,24 @@ end
 
 function YardLeafController:_refreshPoolTargetsFromAreaStates()
 	local nextLeafTypes = {}
+	local seenLeafTypes = {}
+	local function appendAreaPool(areaId)
+		for _, poolEntry in LeafConfig.AreaPools[areaId] or {} do
+			local leafType = poolEntry.LeafType
+			if self.ModelPools[leafType] and not seenLeafTypes[leafType] then
+				seenLeafTypes[leafType] = true
+				table.insert(nextLeafTypes, leafType)
+			end
+		end
+	end
+	local lobbyState = self.AreaStates[LeafConfig.Lobby.AreaId]
+	if lobbyState and lobbyState.GameplayReady == true then
+		appendAreaPool(LeafConfig.Lobby.AreaId)
+	end
 	for _, areaId in RegionConfig.Order do
 		local areaState = self.AreaStates[areaId]
 		if areaState and areaState.GameplayReady == true and areaState.Completed ~= true then
-			local seenLeafTypes = {}
-			for _, poolEntry in LeafConfig.AreaPools[areaId] or {} do
-				local leafType = poolEntry.LeafType
-				if self.ModelPools[leafType] and not seenLeafTypes[leafType] then
-					seenLeafTypes[leafType] = true
-					table.insert(nextLeafTypes, leafType)
-				end
-			end
+			appendAreaPool(areaId)
 			break
 		end
 	end
@@ -1375,6 +1387,12 @@ function YardLeafController:_applyAreaStates()
 		folder:SetAttribute("GameplayReady", areaState and areaState.GameplayReady == true or false)
 		folder:SetAttribute("PreviewOnly", areaState and areaState.PreviewOnly == true or false)
 	end
+	local lobbyAreaId = LeafConfig.Lobby.AreaId
+	local lobbyFolder = self:_ensureFolder(lobbyAreaId)
+	local lobbyState = self.AreaStates[lobbyAreaId]
+	lobbyFolder:SetAttribute("GenerationComplete", lobbyState ~= nil)
+	lobbyFolder:SetAttribute("GameplayReady", lobbyState and lobbyState.GameplayReady == true or false)
+	lobbyFolder:SetAttribute("PreviewOnly", false)
 	self:_refreshPoolTargetsFromAreaStates()
 	self:_updateFinalGuidanceState()
 end

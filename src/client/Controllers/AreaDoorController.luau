@@ -4,6 +4,7 @@ local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local Workspace = game:GetService("Workspace")
 
+local CoinFormat = require(ReplicatedStorage.Shared.CoinFormat)
 local AreaUnlockConfig = require(ReplicatedStorage.Shared.Config.AreaUnlockConfig)
 local RegionConfig = require(ReplicatedStorage.Shared.Config.RegionConfig)
 
@@ -48,9 +49,11 @@ function AreaDoorController:Init(remotes)
 	end
 	self.HomeYardProgress = nil
 	self.IsVisitingYard = false
+	self.RebirthCount = 0
 	self.EligibleTargetAreaId = nil
 	self.Bindings = {}
 	self.BoundDoorRoots = {}
+	self.MissingPriceUIWarnings = {}
 	self.TouchRequestTimes = {}
 	self.HasReceivedSnapshot = false
 	self.GuidanceRefreshElapsed = 0
@@ -71,6 +74,7 @@ function AreaDoorController:Init(remotes)
 			and snapshot.HomeYardProgress
 			or nil
 		self.IsVisitingYard = snapshot.IsVisitingYard == true
+		self.RebirthCount = math.max(0, math.floor(tonumber(snapshot.RebirthCount) or 0))
 		self:_refreshAllDoors(self.HasReceivedSnapshot)
 		self:_refreshEligibleTargetAreaId()
 		self.GuidanceRefreshElapsed = 0
@@ -315,6 +319,9 @@ function AreaDoorController:_bindDoorModel(doorModel, doorRoot)
 	local frame = surfaceGui and surfaceGui:FindFirstChild("Frame")
 	local button = frame and frame:FindFirstChild("ImageButton")
 	local textLabel = button and button:FindFirstChild("TextLabel")
+	local priceFrame = surfaceGui and surfaceGui:FindFirstChild("rebirth")
+	local priceImage = priceFrame and priceFrame:FindFirstChild("ImageLabel")
+	local priceLabel = priceImage and priceImage:FindFirstChild("x1")
 	if
 		not doorPart
 		or not doorPart:IsA("BasePart")
@@ -327,6 +334,23 @@ function AreaDoorController:_bindDoorModel(doorModel, doorRoot)
 	then
 		return
 	end
+	if
+		not priceFrame
+		or not priceFrame:IsA("GuiObject")
+		or not priceImage
+		or not priceImage:IsA("ImageLabel")
+		or not priceLabel
+		or not priceLabel:IsA("TextLabel")
+	then
+		local warningKey = doorModel:GetFullName()
+		if not self.MissingPriceUIWarnings[warningKey] then
+			self.MissingPriceUIWarnings[warningKey] = true
+			warn(warningKey .. ".Door01.SurfaceGui.rebirth.ImageLabel.x1 is missing or invalid")
+		end
+		priceFrame = nil
+		priceImage = nil
+		priceLabel = nil
+	end
 
 	local binding = {
 		Model = doorModel,
@@ -334,6 +358,9 @@ function AreaDoorController:_bindDoorModel(doorModel, doorRoot)
 		SurfaceGui = surfaceGui,
 		Button = button,
 		TextLabel = textLabel,
+		PriceFrame = priceFrame,
+		PriceImage = priceImage,
+		PriceLabel = priceLabel,
 		Config = config,
 		ExpectedParent = doorRoot,
 		Panels = {},
@@ -498,6 +525,12 @@ end
 function AreaDoorController:_applyDoorState(binding, allowAnimation)
 	local unlocked = self.UnlockedAreas[binding.Config.TargetAreaId] == true
 	local targetAreaName = RegionConfig[binding.Config.TargetAreaId].DisplayName
+	local unlockPrice = AreaUnlockConfig.GetUnlockPrice(binding.Config, self.RebirthCount)
+	if binding.PriceFrame and binding.PriceFrame.Parent then
+		binding.PriceFrame.Visible = not unlocked
+		binding.PriceImage.Image = AreaUnlockConfig.CoinImage
+		binding.PriceLabel.Text = "x" .. CoinFormat.Compact(unlockPrice)
+	end
 	local stateChanged = binding.IsUnlocked ~= unlocked
 	local shouldAnimate = allowAnimation
 		and stateChanged

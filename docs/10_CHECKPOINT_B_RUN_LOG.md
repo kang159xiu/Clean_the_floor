@@ -356,3 +356,12 @@ B-002五级升级价格：双手范围`100/200/450/750/1500`、速度`63/188/375
 - `HandUpgradeController:SelectPage`统一切换四个页面及按钮渐变：当前按钮只启用`Stud["Owned/Locked"]`，其他三个只启用`Stud.Cost`；两种渐变颜色、按钮布局、购买逻辑和存档均未修改。
 - 正确Place `95556867008792` Studio Play通过：初始仅按钮1选中并显示Player页；点击按钮2、3、4后分别仅选中对应按钮并显示Hands、Broom、Blower页，任意时刻选中数和可见页面数均为1。
 - 选择按钮4后关闭并重新打开升级面板，仍保持按钮4选中和Blower页可见；Output未发现初始化、路径或渐变类型错误。Rojo 7.5.1构建通过：`.codex-upgrade-page-selection-verify.rbxlx`。
+
+## 2026-08-18 大厅共享钱币池恢复专项
+
+- 正确Place `95556867008792`仅通过Studio MCP检查；Edit确认`Workspace["大厅装扮"].ground [Model]`存在且当前包含1个后代BasePart，Model外同名Part不参与生成。
+- 冷启动时Server/Client Bootstrap全部完成，客户端`succeeded=29 failed=0 skipped=0`；此前热同步中短暂出现的`initializeLobby`缺失方法在完整同步后的新Play中不再出现。
+- Lobby使用稳定`Lobby_00001～Lobby_00600`池位；运行约60秒后客户端在Streaming范围内观察到592个本地模型并已出现`Lobby_00600`，其余模型由距离流式回收，不改变600个服务端逻辑池位。
+- MCP装备Tool01并在大厅实际收取后，背包从`23/500`增加到`24/500`；用户同时现场确认大厅钱币已显示且可收集。
+- Output未发现LeafService、YardLeafController、快照、增量或重复实例错误。全服多客户端同步仍需发布服或多人Studio会话复验。
+- `scripts\verify-project.cmd`通过，功能文档、manifest和Rojo构建均通过。

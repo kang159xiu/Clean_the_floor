@@ -3,6 +3,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local BagConfig = require(ReplicatedStorage.Shared.Config.BagConfig)
 local HandUpgradeConfig = require(ReplicatedStorage.Shared.Config.HandUpgradeConfig)
+local LeafConfig = require(ReplicatedStorage.Shared.Config.LeafConfig)
 local TutorialConfig = require(ReplicatedStorage.Shared.Config.TutorialConfig)
 
 local TutorialService = {}
@@ -268,7 +269,11 @@ function TutorialService:_resumeLoadedSession(player, session)
 end
 
 function TutorialService:OnLeafRemoved(player, areaId, position, collectionMode)
-	if not player or (collectionMode ~= "Bag" and collectionMode ~= "InstantRecycle") then
+	if
+		areaId == LeafConfig.Lobby.AreaId
+		or not player
+		or (collectionMode ~= "Bag" and collectionMode ~= "InstantRecycle")
+	then
 		return
 	end
 	local session = self:_ensureSession(player)
@@ -287,7 +292,7 @@ function TutorialService:OnLeafRemoved(player, areaId, position, collectionMode)
 end
 
 function TutorialService:OnRecycleSucceeded(player, areaId, awardedCoins)
-	if math.max(0, tonumber(awardedCoins) or 0) <= 0 then
+	if areaId == LeafConfig.Lobby.AreaId or math.max(0, tonumber(awardedCoins) or 0) <= 0 then
 		return
 	end
 	local session = self:_ensureSession(player)

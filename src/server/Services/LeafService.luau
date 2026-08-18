@@ -224,9 +224,12 @@ function LeafService:Init(playerDataService, bagService, toolActionService, metr
 	self.AreaLeafPools = {}
 	self.TemplateBounds = {}
 	self.SnapshotSerials = {}
+	self.SnapshotCompletedSerials = {}
+	self.PendingLobbyDeltasByPlayer = {}
 	self.LastSnapshotRequestTimes = {}
 	self.RefillPreparationAreaStates = {}
 	self.RefillPreparationCursor = 1
+	self.LobbyYard = nil
 
 	local orderedLeafTypes = {}
 	for _, leafType in LeafConfig.ActiveOrder do
@@ -322,6 +325,95 @@ function LeafService:Init(playerDataService, bagService, toolActionService, metr
 			),
 		}
 	end
+
+	local lobbyConfig = LeafConfig.Lobby
+	assert(type(lobbyConfig) == "table", "Missing LeafConfig.Lobby")
+	local lobbyAreaId = lobbyConfig.AreaId
+	assert(type(lobbyAreaId) == "string" and lobbyAreaId ~= "", "LeafConfig.Lobby.AreaId must be a string")
+	local configuredLobbyPool = LeafConfig.AreaPools[lobbyAreaId]
+	assert(
+		type(configuredLobbyPool) == "table" and #configuredLobbyPool > 0,
+		"Missing LeafConfig lobby pool"
+	)
+	local lobbyPoolTypes = {}
+	local normalizedLobbyPool = table.create(#configuredLobbyPool)
+	local totalLobbyPoolWeight = 0
+	for _, entry in configuredLobbyPool do
+		local leafType = entry.LeafType
+		local spawnWeight = tonumber(entry.SpawnWeight)
+		assert(
+			type(leafType) == "string" and orderedLeafTypes[leafType],
+			"Invalid leaf type in Lobby pool"
+		)
+		assert(not lobbyPoolTypes[leafType], "Duplicate leaf type in Lobby pool: " .. leafType)
+		assert(
+			isFiniteNumber(spawnWeight) and spawnWeight > 0,
+			"Invalid spawn weight for Lobby leaf type: " .. leafType
+		)
+		lobbyPoolTypes[leafType] = true
+		normalizedLobbyPool[#normalizedLobbyPool + 1] = {
+			LeafType = leafType,
+			SpawnWeight = spawnWeight,
+		}
+		totalLobbyPoolWeight += spawnWeight
+	end
+	self.AreaLeafPools[lobbyAreaId] = {
+		Entries = normalizedLobbyPool,
+		TotalWeight = totalLobbyPoolWeight,
+	}
+
+	local lobbyContainer = Workspace:FindFirstChild(lobbyConfig.ContainerName)
+	assert(
+		lobbyContainer and lobbyContainer:IsA("Folder"),
+		"Workspace." .. tostring(lobbyConfig.ContainerName) .. " must be a Folder"
+	)
+	local lobbyGround = lobbyContainer:FindFirstChild(lobbyConfig.GroundName)
+	assert(
+		lobbyGround and lobbyGround:IsA("Model"),
+		tostring(lobbyConfig.ContainerName) .. "." .. tostring(lobbyConfig.GroundName) .. " must be a Model"
+	)
+	table.insert(leafPlacementExclusions, lobbyGround)
+	local lobbyGeneratedFolder = lobbyContainer:FindFirstChild("GeneratedLeaves")
+	if lobbyGeneratedFolder then
+		assert(lobbyGeneratedFolder:IsA("Folder"), "Lobby.GeneratedLeaves must be a Folder")
+		lobbyGeneratedFolder:ClearAllChildren()
+		table.insert(leafPlacementExclusions, lobbyGeneratedFolder)
+	end
+	local lobbySurfaces = {}
+	local lobbySurfaceArea = 0
+	for _, descendant in lobbyGround:GetDescendants() do
+		if descendant:IsA("BasePart") then
+			descendant.Anchored = true
+			descendant.CanQuery = true
+			lobbySurfaceArea += descendant.Size.X * descendant.Size.Z
+			lobbySurfaces[#lobbySurfaces + 1] = {
+				Part = descendant,
+				CumulativeArea = lobbySurfaceArea,
+			}
+		end
+	end
+	assert(#lobbySurfaces > 0, "Lobby ground has no BasePart surfaces")
+	assert(
+		isFiniteNumber(lobbyConfig.BagValue) and lobbyConfig.BagValue > 0,
+		"LeafConfig.Lobby.BagValue must be positive"
+	)
+	assert(
+		isFiniteNumber(lobbyConfig.LeafCount) and lobbyConfig.LeafCount >= 1,
+		"LeafConfig.Lobby.LeafCount must be positive"
+	)
+	local lobbyRaycastParams = RaycastParams.new()
+	lobbyRaycastParams.FilterType = Enum.RaycastFilterType.Include
+	lobbyRaycastParams.FilterDescendantsInstances = { lobbyGround }
+	lobbyRaycastParams.IgnoreWater = true
+	self.AreaDefinitions[lobbyAreaId] = {
+		AreaId = lobbyAreaId,
+		Area = lobbyContainer,
+		Ground = lobbyGround,
+		Surfaces = lobbySurfaces,
+		SurfaceArea = lobbySurfaceArea,
+		RaycastParams = lobbyRaycastParams,
+		FullTargetLeafCount = math.max(1, math.floor(lobbyConfig.LeafCount)),
+	}
 	for leafType in orderedLeafTypes do
 		assert(pooledLeafTypes[leafType], "Leaf type is not assigned to an area pool: " .. leafType)
 	end
@@ -378,6 +470,8 @@ function LeafService:Init(playerDataService, bagService, toolActionService, metr
 		harvestAimEntries[player] = nil
 		lastHarvestAimUpdateTimes[player] = nil
 		self.SnapshotSerials[player] = nil
+		self.SnapshotCompletedSerials[player] = nil
+		self.PendingLobbyDeltasByPlayer[player] = nil
 		self.LastSnapshotRequestTimes[player] = nil
 		for leaf in activeMovingLeaves do
 			if leaf.LastInfluencedPlayer == player then
@@ -445,6 +539,7 @@ function LeafService:Init(playerDataService, bagService, toolActionService, metr
 			self:_updateMovingLeaves(LEAF_MOTION_STEP)
 		end
 	end)
+	self:_initializeLobby()
 end
 
 function LeafService:_chooseLeafType(random, areaId)
@@ -496,6 +591,189 @@ function LeafService:_makeYard(owner)
 	}
 	self.Yards[owner] = yard
 	return yard
+end
+
+function LeafService:_getLobbyLeafId(slotIndex)
+	return string.format("Lobby_%05d", slotIndex)
+end
+
+function LeafService:_queueLobbySlot(areaState, slotIndex)
+	local yard = areaState and areaState.Yard
+	if
+		self.LobbyYard ~= yard
+		or yard.Areas[areaState.AreaId] ~= areaState
+		or areaState.Cancelled == true
+		or type(slotIndex) ~= "number"
+	then
+		return false
+	end
+	local normalizedSlotIndex = math.floor(slotIndex)
+	if normalizedSlotIndex < 1 or normalizedSlotIndex > areaState.GeneratedLeafCount then
+		return false
+	end
+	local leafId = self:_getLobbyLeafId(normalizedSlotIndex)
+	if yard.LeavesById[leafId] or areaState.QueuedSlots[normalizedSlotIndex] then
+		return false
+	end
+	areaState.ActivationQueueTail += 1
+	areaState.ActivationQueue[areaState.ActivationQueueTail] = normalizedSlotIndex
+	areaState.QueuedSlots[normalizedSlotIndex] = true
+	return true
+end
+
+function LeafService:_compactLobbyActivationQueue(areaState)
+	local head = areaState.ActivationQueueHead
+	local tail = areaState.ActivationQueueTail
+	if head <= 1 or head <= 1024 or head <= tail / 2 then
+		return
+	end
+	local compacted = {}
+	for index = head, tail do
+		local slotIndex = areaState.ActivationQueue[index]
+		if slotIndex then
+			compacted[#compacted + 1] = slotIndex
+		end
+	end
+	areaState.ActivationQueue = compacted
+	areaState.ActivationQueueHead = 1
+	areaState.ActivationQueueTail = #compacted
+end
+
+function LeafService:_activateLobbySlot(areaState, slotIndex)
+	local yard = areaState.Yard
+	if self.LobbyYard ~= yard or areaState.Cancelled == true then
+		return false
+	end
+	local leafId = self:_getLobbyLeafId(slotIndex)
+	if yard.LeavesById[leafId] then
+		return true
+	end
+
+	local generation = (areaState.SlotGenerations[slotIndex] or 0) + 1
+	local random = Random.new(normalizeRandomSeed(
+		areaState.SequenceSeed
+			+ slotIndex * 69_621
+			+ generation * 130_363
+			+ 97_409
+	))
+	local leafType = self:_chooseLeafType(random, areaState.AreaId)
+	local boundingSize = self.TemplateBounds[leafType].Size
+	local boundingCFrame, _, placementSurface = self:_chooseLeafPlacement(
+		random,
+		areaState.Definition,
+		areaState.Region,
+		boundingSize
+	)
+	if not boundingCFrame then
+		return false
+	end
+
+	local leaf = areaState.Slots[slotIndex]
+	if not leaf then
+		leaf = {}
+		areaState.Slots[slotIndex] = leaf
+	end
+	leaf.Id = leafId
+	leaf.Yard = yard
+	leaf.AreaId = areaState.AreaId
+	leaf.AreaState = areaState
+	leaf.IsLobby = true
+	leaf.LobbySlotIndex = slotIndex
+	leaf.LeafType = leafType
+	leaf.BagValue = areaState.BagValue
+	leaf.BoundingCFrame = boundingCFrame
+	leaf.PlacementSurface = placementSurface
+	leaf.BoundingSize = boundingSize
+	leaf.Velocity = Vector3.zero
+	leaf.AngularVelocity = 0
+	leaf.PoweredUntil = 0
+	leaf.LastInfluencedAt = 0
+	leaf.LastInfluencedPlayer = nil
+	leaf.LastInfluencedToolId = nil
+	leaf.StopPoint = nil
+	leaf.StopRadius = 0
+	leaf.MotionDirty = false
+	leaf.Revision = (tonumber(leaf.Revision) or 0) + 1
+	areaState.SlotGenerations[slotIndex] = generation
+	self:_insertActiveLeaf(areaState, leaf)
+	self:_sendDelta(yard, {
+		Kind = "Upsert",
+		Leaves = { self:_serializeLeaf(leaf) },
+	})
+	return true
+end
+
+function LeafService:_initializeLobby()
+	local lobbyConfig = LeafConfig.Lobby
+	local areaId = lobbyConfig.AreaId
+	local definition = self.AreaDefinitions[areaId]
+	local leafCount = definition.FullTargetLeafCount
+	local yard = {
+		IsLobby = true,
+		Owner = nil,
+		OwnerUserId = 0,
+		Areas = {},
+		LeavesById = {},
+		Revision = 0,
+		Preparing = false,
+		Ready = true,
+		PendingMoveLeaves = {},
+		NextMoveReplicationAt = 0,
+		ForceMoveReplication = false,
+	}
+	local areaState = {
+		IsLobby = true,
+		AreaId = areaId,
+		Definition = definition,
+		Region = lobbyConfig,
+		Yard = yard,
+		Generated = true,
+		PreviewOnly = false,
+		GeneratedLeafCount = leafCount,
+		TotalLeafCount = leafCount,
+		CollectedLeafCount = 0,
+		TotalValue = leafCount * lobbyConfig.BagValue,
+		CollectedValue = 0,
+		Completed = false,
+		BagValue = lobbyConfig.BagValue,
+		Leaves = {},
+		LeafGrid = {},
+		HandPickupGrid = {},
+		SequenceSeed = normalizeRandomSeed(lobbyConfig.Seed),
+		Slots = {},
+		SlotGenerations = {},
+		QueuedSlots = {},
+		ActivationQueue = {},
+		ActivationQueueHead = 1,
+		ActivationQueueTail = 0,
+		Cancelled = false,
+	}
+	yard.Areas[areaId] = areaState
+	self.LobbyYard = yard
+	for slotIndex = 1, leafCount do
+		self:_queueLobbySlot(areaState, slotIndex)
+	end
+
+	local respawnDelay = math.max(0.01, tonumber(lobbyConfig.RespawnDelay) or 0.1)
+	task.spawn(function()
+		while self.LobbyYard == yard and areaState.Cancelled ~= true do
+			task.wait(respawnDelay)
+			if self.LobbyYard ~= yard or areaState.Cancelled == true then
+				break
+			end
+			local head = areaState.ActivationQueueHead
+			if head <= areaState.ActivationQueueTail then
+				local slotIndex = areaState.ActivationQueue[head]
+				areaState.ActivationQueue[head] = nil
+				areaState.ActivationQueueHead = head + 1
+				areaState.QueuedSlots[slotIndex] = nil
+				if not self:_activateLobbySlot(areaState, slotIndex) then
+					self:_queueLobbySlot(areaState, slotIndex)
+				end
+				self:_compactLobbyActivationQueue(areaState)
+			end
+		end
+	end)
 end
 
 function LeafService:_discardAreaState(yard, areaId)
@@ -716,7 +994,18 @@ function LeafService:_queryHandPickupLeaves(yard, center, radius)
 	local radiusSquared = radius * radius
 	local minimumCellX, minimumCellZ = handPickupGridCoordinates(center - Vector3.new(radius, 0, radius))
 	local maximumCellX, maximumCellZ = handPickupGridCoordinates(center + Vector3.new(radius, 0, radius))
+	local queryAreaStates = {}
 	for _, areaState in yard.Areas do
+		queryAreaStates[#queryAreaStates + 1] = areaState
+	end
+	local lobbyAreaState = self.LobbyYard
+		and self.LobbyYard ~= yard
+		and self.LobbyYard.Areas[LeafConfig.Lobby.AreaId]
+		or nil
+	if lobbyAreaState then
+		queryAreaStates[#queryAreaStates + 1] = lobbyAreaState
+	end
+	for _, areaState in queryAreaStates do
 		if areaState.Generated and areaState.HandPickupGrid then
 			for cellX = minimumCellX, maximumCellX do
 				for cellZ = minimumCellZ, maximumCellZ do
@@ -796,6 +1085,15 @@ function LeafService:_queryYardLeaves(yard, center, radius)
 			for _, leaf in self:_queryAreaLeaves(areaState, center, radius) do
 				table.insert(leaves, leaf)
 			end
+		end
+	end
+	local lobbyAreaState = self.LobbyYard
+		and self.LobbyYard ~= yard
+		and self.LobbyYard.Areas[LeafConfig.Lobby.AreaId]
+		or nil
+	if lobbyAreaState and lobbyAreaState.Generated then
+		for _, leaf in self:_queryAreaLeaves(lobbyAreaState, center, radius) do
+			table.insert(leaves, leaf)
 		end
 	end
 	return leaves
@@ -1197,10 +1495,13 @@ end
 
 function LeafService:_isCurrentAreaState(areaState)
 	local yard = areaState and areaState.Yard
-	return yard ~= nil
-		and self.Yards[yard.Owner] == yard
-		and yard.Areas[areaState.AreaId] == areaState
-		and areaState.Cancelled ~= true
+	if not yard or areaState.Cancelled == true or yard.Areas[areaState.AreaId] ~= areaState then
+		return false
+	end
+	if yard.IsLobby == true then
+		return self.LobbyYard == yard
+	end
+	return self.Yards[yard.Owner] == yard
 end
 
 function LeafService:_getDesiredActiveLeafCount(areaState)
@@ -1555,6 +1856,11 @@ function LeafService:SendSnapshot(player)
 	end
 	local serial = (self.SnapshotSerials[player] or 0) + 1
 	self.SnapshotSerials[player] = serial
+	self.SnapshotCompletedSerials[player] = nil
+	self.PendingLobbyDeltasByPlayer[player] = {
+		Serial = serial,
+		Packets = {},
+	}
 	local ownerUserId = yard.OwnerUserId
 	local areas = {}
 	local leaves = {}
@@ -1571,6 +1877,19 @@ function LeafService:SendSnapshot(player)
 			for _, leaf in areaState.Leaves do
 				table.insert(leaves, self:_serializeLeaf(leaf, snapshotMotionSampleTime))
 			end
+		end
+	end
+	local lobbyYard = self.LobbyYard
+	local lobbyAreaState = lobbyYard and lobbyYard.Areas[LeafConfig.Lobby.AreaId] or nil
+	if lobbyAreaState then
+		table.insert(areas, {
+			AreaId = lobbyAreaState.AreaId,
+			GameplayReady = true,
+			PreviewOnly = false,
+			Completed = false,
+		})
+		for _, leaf in lobbyAreaState.Leaves do
+			table.insert(leaves, self:_serializeLeaf(leaf, snapshotMotionSampleTime))
 		end
 	end
 
@@ -1607,6 +1926,14 @@ function LeafService:SendSnapshot(player)
 				YardOwnerUserId = ownerUserId,
 				Serial = serial,
 			})
+			self.SnapshotCompletedSerials[player] = serial
+			local pendingLobbyDeltas = self.PendingLobbyDeltasByPlayer[player]
+			self.PendingLobbyDeltasByPlayer[player] = nil
+			if pendingLobbyDeltas and pendingLobbyDeltas.Serial == serial then
+				for _, pendingPacket in pendingLobbyDeltas.Packets do
+					self.Remotes.YardLeafDelta:FireClient(player, pendingPacket)
+				end
+			end
 		end
 	end)
 	return true
@@ -1619,6 +1946,10 @@ function LeafService:SendSnapshotToMembers(yard)
 end
 
 function LeafService:_sendDelta(yard, packet)
+	if yard.IsLobby == true then
+		self:_sendLobbyDelta(packet)
+		return
+	end
 	yard.Revision += 1
 	packet.YardOwnerUserId = yard.OwnerUserId
 	packet.Revision = yard.Revision
@@ -1629,13 +1960,36 @@ function LeafService:_sendDelta(yard, packet)
 	end
 end
 
+function LeafService:_sendLobbyDelta(packet)
+	local lobbyYard = self.LobbyYard
+	if not lobbyYard then
+		return
+	end
+	lobbyYard.Revision += 1
+	packet.Revision = lobbyYard.Revision
+	for _, player in Players:GetPlayers() do
+		local activeYard = self:_getYardForPlayer(player)
+		local serial = self.SnapshotSerials[player]
+		if activeYard and activeYard.Ready and serial then
+			local playerPacket = table.clone(packet)
+			playerPacket.YardOwnerUserId = activeYard.OwnerUserId
+			local pendingEntry = self.PendingLobbyDeltasByPlayer[player]
+			if pendingEntry and pendingEntry.Serial == serial then
+				pendingEntry.Packets[#pendingEntry.Packets + 1] = playerPacket
+			elseif self.SnapshotCompletedSerials[player] == serial then
+				self.Remotes.YardLeafDelta:FireClient(player, playerPacket)
+			end
+		end
+	end
+end
+
 function LeafService:_queueLeafUpsert(leaf)
 	leaf.Yard.PendingMoveLeaves[leaf.Id] = leaf
 end
 
 function LeafService:_flushMoveDeltas()
 	local now = os.clock()
-	for _, yard in self.Yards do
+	local function flushYard(yard)
 		local hasPendingLeaves = next(yard.PendingMoveLeaves) ~= nil
 		local shouldFlush = yard.ForceMoveReplication == true
 			or now + LEAF_MOVE_REPLICATION_CLOCK_TOLERANCE
@@ -1661,6 +2015,12 @@ function LeafService:_flushMoveDeltas()
 		elseif not hasPendingLeaves then
 			yard.ForceMoveReplication = false
 		end
+	end
+	for _, yard in self.Yards do
+		flushYard(yard)
+	end
+	if self.LobbyYard then
+		flushYard(self.LobbyYard)
 	end
 end
 
@@ -1877,7 +2237,7 @@ function LeafService:_tryAutoCollectBroomLeaf(leaf, deferSnapshot)
 		or not player:IsA("Player")
 		or player.Parent ~= Players
 		or not self.PlayerDataService:GetState(player)
-		or self:_getYardForPlayer(player) ~= leaf.Yard
+		or (leaf.Yard ~= self.LobbyYard and self:_getYardForPlayer(player) ~= leaf.Yard)
 	then
 		return "None", nil
 	end
@@ -2437,6 +2797,18 @@ end
 
 function LeafService:_recordAreaRemoval(leaf, collectionMode, influencingPlayer)
 	local areaState = leaf.AreaState
+	if areaState.IsLobby == true then
+		self:_queueLobbySlot(areaState, leaf.LobbySlotIndex)
+		self:_notifyLeafCollectedHandlers(
+			influencingPlayer,
+			areaState.AreaId,
+			leaf.BoundingCFrame.Position,
+			0,
+			collectionMode,
+			influencingPlayer.UserId
+		)
+		return
+	end
 	areaState.CollectedValue = math.min(areaState.TotalValue, areaState.CollectedValue + leaf.BagValue)
 	areaState.CollectedLeafCount = math.min(areaState.TotalLeafCount, areaState.CollectedLeafCount + 1)
 	local ownerState = self.PlayerDataService:GetState(leaf.Yard.Owner)
@@ -2467,17 +2839,17 @@ function LeafService:_createCollectionBatch(player, toolId)
 	return {
 		Player = player,
 		ToolId = toolId,
-		LeafIds = {},
+		LeafIdsByYard = {},
+		RemovedLeafCount = 0,
 		LeafHints = {},
 		AddedAmount = 0,
 		LeafType = nil,
 		StateChanged = false,
-		Yard = nil,
 	}
 end
 
 function LeafService:_finishCollectionBatch(batch)
-	if not batch or #batch.LeafIds <= 0 then
+	if not batch or batch.RemovedLeafCount <= 0 then
 		return
 	end
 	local profilingHandBatch = batch.ToolId == HAND_TOOL_ID
@@ -2485,11 +2857,10 @@ function LeafService:_finishCollectionBatch(batch)
 		debug.profilebegin("Tool01BatchRemoval")
 	end
 	local player = batch.Player
-	local yard = batch.Yard
-	if yard then
+	for yard, leafIds in batch.LeafIdsByYard do
 		self:_sendDelta(yard, {
 			Kind = "Remove",
-			LeafIds = batch.LeafIds,
+			LeafIds = leafIds,
 			Effect = "Collect",
 			TargetUserId = player.UserId,
 			Duration = 0.35,
@@ -2533,8 +2904,13 @@ function LeafService:_removeLeaf(leaf, effect, targetUserId, targetPosition, rem
 		leaf.AreaListIndex = nil
 	end
 	if removalBatch then
-		removalBatch.Yard = removalBatch.Yard or yard
-		removalBatch.LeafIds[#removalBatch.LeafIds + 1] = leaf.Id
+		local leafIds = removalBatch.LeafIdsByYard[yard]
+		if not leafIds then
+			leafIds = {}
+			removalBatch.LeafIdsByYard[yard] = leafIds
+		end
+		leafIds[#leafIds + 1] = leaf.Id
+		removalBatch.RemovedLeafCount += 1
 	else
 		self:_sendDelta(yard, {
 			Kind = "Remove",
@@ -2550,11 +2926,12 @@ end
 
 function LeafService:_collectLeaf(player, leaf, deferSnapshot, collectionBatch)
 	if leaf.Yard.LeavesById[leaf.Id] ~= leaf then return false end
+	local sourceOwnerUserId = if leaf.IsLobby == true then player.UserId else leaf.Yard.OwnerUserId
 	local addedSuccessfully, addedAmount, storageMode, awardedCoins, targetCoins = self.BagService:TryAdd(
 		player,
 		leaf.BagValue,
 		false,
-		leaf.Yard.OwnerUserId
+		sourceOwnerUserId
 	)
 	if not addedSuccessfully then return false end
 	if not self:_removeLeaf(leaf, "Collect", player.UserId, nil, collectionBatch) then return false end
@@ -2602,16 +2979,23 @@ function LeafService:_collectLeaf(player, leaf, deferSnapshot, collectionBatch)
 		self:_notifyLeafStateChanged(player)
 	end
 	if self.MetricsService then
+		local areaProgress = if leaf.IsLobby == true
+			then 0
+			else leaf.AreaState.TotalValue > 0
+				and leaf.AreaState.CollectedValue / leaf.AreaState.TotalValue
+				or 0
 		self.MetricsService:RecordLeafCollected(
 			player,
 			leaf.AreaId,
 			addedAmount,
-			leaf.AreaState.TotalValue > 0 and leaf.AreaState.CollectedValue / leaf.AreaState.TotalValue or 0,
+			areaProgress,
 			self.BagService:IsFull(player),
 			collectionMode
 		)
 	end
-	if not deferSnapshot then self:_queueProgressSnapshot(leaf.Yard, false) end
+	if not deferSnapshot and leaf.IsLobby ~= true then
+		self:_queueProgressSnapshot(leaf.Yard, false)
+	end
 	return true
 end
 

@@ -22,7 +22,7 @@ local TutorialConfig = require(ReplicatedStorage.Shared.Config.TutorialConfig)
 local PlayerDataService = {}
 
 local DATASTORE_NAME = "CleanTheFloor_PlayerCollectibles_v1"
-local DATA_SCHEMA_VERSION = 31
+local DATA_SCHEMA_VERSION = 32
 local ONBOARDING_FUNNEL_VERSION = 1
 local ONBOARDING_FUNNEL_MAX_STEP = 10
 local CLEAR_SPEEDRUN_VERSION = 2
@@ -33,10 +33,6 @@ local PERSISTENT_SAVE_BUDGET_RETRY_SECONDS = 5
 local PERSISTENT_SAVE_RETRY_DELAYS = { 5, 15, 30, 60 }
 local MAX_SAVED_COUNT = 1_000_000_000
 local MAX_SAVED_CURRENCY = PlayerAttributeConfig.MaximumCurrencyValue
-local LEGACY_DIAMOND_TO_COIN_MULTIPLIER = 10
-local LEGACY_AREA_REWARD_MASK = 255
-local LEGACY_AREA_CAPACITY_BIT = bit32.lshift(1, 6 - 1)
-local LEGACY_AREA_CAPACITY_PER_CLAIM = 200
 
 local persistentStore = DataStoreService:GetDataStore(DATASTORE_NAME)
 local states = {}
@@ -521,28 +517,6 @@ local function copyPendingCoinFlip(rawPending)
 	return sanitizePendingCoinFlip(rawPending)
 end
 
-local function migrateLegacyDiamondCurrency(data)
-	if type(data) ~= "table" or data.Diamonds == nil then
-		return false
-	end
-	local legacyDiamonds = sanitizeCoins(data.Diamonds)
-	data.Coins = sanitizeCoins(sanitizeCoins(data.Coins) + legacyDiamonds * LEGACY_DIAMOND_TO_COIN_MULTIPLIER)
-	data.Diamonds = nil
-	return true
-end
-
-local function migrateRemovedSewerData(data)
-	if type(data) ~= "table" then
-		return false
-	end
-	local yardProgress = data.YardProgress
-	if type(yardProgress) ~= "table" or yardProgress.UnlockedSewers == nil then
-		return false
-	end
-	yardProgress.UnlockedSewers = nil
-	return true
-end
-
 local function sanitizeBagLevel(value)
 	local level = sanitizeWholeNumber(value)
 	return math.clamp(level, BagConfig.DefaultLevel, #BagConfig.Levels)
@@ -550,6 +524,20 @@ end
 
 local function sanitizeBagExpansionLevel(value)
 	return BagConfig.NormalizeExpansionLevel(value)
+end
+
+local function normalizeBagCapacityBonusField(data)
+	if type(data) ~= "table" then
+		return 0, false
+	end
+	local rawBonus = if data.BagCapacityBonus ~= nil
+		then data.BagCapacityBonus
+		else data.LegacyAreaBagCapacityBonus
+	local bonus = sanitizeWholeNumber(rawBonus)
+	local changed = data.BagCapacityBonus ~= bonus or data.LegacyAreaBagCapacityBonus ~= nil
+	data.BagCapacityBonus = bonus
+	data.LegacyAreaBagCapacityBonus = nil
+	return bonus, changed
 end
 
 local function sanitizeUnlockedTools(rawTools)
@@ -684,7 +672,7 @@ local function getStorageBagConfig(state)
 	return BagConfig.Levels[level] or BagConfig.Levels[BagConfig.DefaultLevel]
 end
 
-local function getMaximumLoadCapacity(legacyAreaBagCapacityBonus, bagExpansionLevel)
+local function getMaximumLoadCapacity(bagCapacityBonus, bagExpansionLevel)
 	local maximum = BagConfig.Levels[BagConfig.MaxLevel].Capacity
 	for _, bagId in BagConfig.PermanentOrder do
 		if BagConfig.IsPermanentBagEnabled(bagId) then
@@ -695,7 +683,7 @@ local function getMaximumLoadCapacity(legacyAreaBagCapacityBonus, bagExpansionLe
 		end
 	end
 	return maximum
-		+ sanitizeWholeNumber(legacyAreaBagCapacityBonus)
+		+ sanitizeWholeNumber(bagCapacityBonus)
 		+ BagConfig.GetExpansionCapacityBonus(bagExpansionLevel)
 end
 
@@ -703,13 +691,13 @@ local function getSafePersistentBagCapacity(state)
 	local readiness = state and state.PermanentBagOwnershipReady
 	if not readiness or readiness.bag09 ~= true or readiness.bag010 ~= true then
 		return getMaximumLoadCapacity(
-			state and state.LegacyAreaBagCapacityBonus,
+			state and state.BagCapacityBonus,
 			state and state.BagExpansionLevel
 		)
 	end
 	local config = getStorageBagConfig(state)
 	return config.Capacity
-		+ sanitizeWholeNumber(state.LegacyAreaBagCapacityBonus)
+		+ sanitizeWholeNumber(state.BagCapacityBonus)
 		+ BagConfig.GetExpansionCapacityBonus(state.BagExpansionLevel)
 end
 
@@ -855,12 +843,7 @@ local function sanitizeTutorialProgress(rawProgress, tutorialCompleted, handUpgr
 	local amountUpgradeSucceeded = progress.AmountUpgradeSucceeded == true or amountLevel > 0
 	local speedUpgradeSucceeded = progress.SpeedUpgradeSucceeded == true or speedLevel > 0
 	local secondRecycleSucceeded = progress.SecondRecycleSucceeded == true
-	local hasLegacyPhoneProgress = progress.PhonePicked ~= nil
-	-- Old step 5 meant the removed phone interlude had elapsed, not that a second
-	-- recycle happened. Require one successful sale after migration.
-	if hasLegacyPhoneProgress and step >= TutorialConfig.Steps.WaitForSecondRecycle and speedUpgradeSucceeded then
-		step = TutorialConfig.Steps.Complete
-	elseif step == TutorialConfig.Steps.UpgradeSpeed and not secondRecycleSucceeded and not speedUpgradeSucceeded then
+	if step == TutorialConfig.Steps.UpgradeSpeed and not secondRecycleSucceeded and not speedUpgradeSucceeded then
 		step = TutorialConfig.Steps.WaitForSecondRecycle
 	elseif step == TutorialConfig.Steps.WaitForSecondRecycle and secondRecycleSucceeded then
 		step = TutorialConfig.Steps.UpgradeSpeed
@@ -1030,55 +1013,6 @@ local function copyActiveYardProgress(source)
 		UnlockedAreas = activeUnlockedAreas,
 		Areas = activeAreas,
 	}
-end
-
-local function sanitizeLegacyAreaRewardClaims(rawClaims)
-	local claims = {}
-	if type(rawClaims) ~= "table" then
-		return claims
-	end
-	for rawOwnerUserId, rawMask in rawClaims do
-		local ownerUserId = tonumber(rawOwnerUserId)
-		local mask = math.clamp(math.floor(tonumber(rawMask) or 0), 0, LEGACY_AREA_REWARD_MASK)
-		if ownerUserId and ownerUserId > 0 and mask > 0 then
-			claims[tostring(math.floor(ownerUserId))] = mask
-		end
-	end
-	return claims
-end
-
-local function addCompletedHomeAreaCapacityClaim(claims, yardProgress, ownerUserId)
-	local areaProgress = yardProgress.Areas.Area_06
-	if not areaProgress or tonumber(areaProgress.ClearedRatio) < 1 then
-		return
-	end
-	local ownerKey = tostring(ownerUserId)
-	local mask = claims[ownerKey] or 0
-	claims[ownerKey] = bit32.bor(mask, LEGACY_AREA_CAPACITY_BIT)
-end
-
-local function migrateLegacyAreaBagCapacityBonus(data, yardProgress, ownerUserId)
-	local hadLegacyClaims = data.AreaRewardClaims ~= nil
-	local rawStoredBonus = data.LegacyAreaBagCapacityBonus
-	if rawStoredBonus ~= nil then
-		local bonus = sanitizeWholeNumber(rawStoredBonus)
-		data.LegacyAreaBagCapacityBonus = bonus
-		data.AreaRewardClaims = nil
-		return bonus, hadLegacyClaims or bonus ~= rawStoredBonus
-	end
-
-	local claims = sanitizeLegacyAreaRewardClaims(data.AreaRewardClaims)
-	addCompletedHomeAreaCapacityClaim(claims, yardProgress, ownerUserId)
-	local claimCount = 0
-	for _, mask in claims do
-		if bit32.band(mask, LEGACY_AREA_CAPACITY_BIT) ~= 0 then
-			claimCount += 1
-		end
-	end
-	local bonus = sanitizeWholeNumber(claimCount * LEGACY_AREA_CAPACITY_PER_CLAIM)
-	data.LegacyAreaBagCapacityBonus = bonus
-	data.AreaRewardClaims = nil
-	return bonus, true
 end
 
 local function calculateEffectiveModifiers(rawPlayerAttributeLevels, rebirthCount)
@@ -1275,16 +1209,10 @@ local function makeDefaultState(
 	local data = persistentData or {}
 	local dataResetDateKey = DataResetConfig.NormalizeStoredDateKey(data.DataResetDateKey)
 	local dataResetNoticeDateKey = DataResetConfig.NormalizeStoredDateKey(data.DataResetNoticeDateKey)
-	local migratedLegacyDiamonds = migrateLegacyDiamondCurrency(data)
-	local removedLegacySewers = migrateRemovedSewerData(data)
+	local bagCapacityBonus, migratedBagCapacityBonus = normalizeBagCapacityBonusField(data)
 	local bagLevel = sanitizeBagLevel(data.BagLevel)
 	local bagExpansionLevel = sanitizeBagExpansionLevel(data.BagExpansionLevel)
 	local yardProgress = sanitizeYardProgress(data.YardProgress, data.UnlockedAreas)
-	local legacyAreaBagCapacityBonus, migratedLegacyAreaRewards = migrateLegacyAreaBagCapacityBonus(
-		data,
-		yardProgress,
-		playerUserId
-	)
 	local playerAttributeLevels = sanitizePlayerAttributeLevels(data.PlayerAttributeLevels)
 	local rebirthCount = RebirthConfig.NormalizeCount(data.RebirthCount)
 	local lostItemRunProgress = sanitizeLostItemRunProgress(
@@ -1301,7 +1229,7 @@ local function makeDefaultState(
 	-- Permanent bag ownership is verified after the runtime state exists. Preserve a
 	-- legitimately larger saved load until those Marketplace queries finish.
 	local bagCapacity = getMaximumLoadCapacity(
-		legacyAreaBagCapacityBonus,
+		bagCapacityBonus,
 		bagExpansionLevel
 	)
 	local currentBagValue = math.clamp(sanitizeWholeNumber(data.CurrentBagValue), 0, bagCapacity)
@@ -1351,7 +1279,7 @@ local function makeDefaultState(
 		UnlockedTools = unlockedTools,
 		UnlockedAreas = yardProgress.UnlockedAreas,
 		YardProgress = yardProgress,
-		LegacyAreaBagCapacityBonus = legacyAreaBagCapacityBonus,
+		BagCapacityBonus = bagCapacityBonus,
 		ActiveYardOwnerUserId = playerUserId,
 		AllowGuestPoop = data.AllowGuestPoop ~= false,
 		CommunityRewardClaimed = data.CommunityRewardClaimed == true,
@@ -1391,15 +1319,12 @@ local function makeDefaultState(
 		CollectedCounts = sanitizeCollectedCounts(persistentData and persistentData.CollectedCounts),
 		CodexClaimedTiers = sanitizeCodexClaimedTiers(persistentData and persistentData.CodexClaimedTiers),
 		PersistentDataAvailable = persistentDataAvailable,
-		PersistentDirty = migratedLegacyDiamonds
-			or removedLegacySewers
-			or migratedLegacyAreaRewards
+		PersistentDirty = migratedBagCapacityBonus
 			or retiredClearSpeedrun
 			or tonumber(data.SchemaVersion) ~= DATA_SCHEMA_VERSION
 			or type(data.PlayerAttributeLevels) ~= "table"
 			or (type(data.PlayerAttributeLevels) == "table" and data.PlayerAttributeLevels.Luck ~= nil)
 			or type(data.TutorialProgress) ~= "table"
-			or (type(data.TutorialProgress) == "table" and data.TutorialProgress.PhonePicked ~= nil)
 			or (
 				type(data.TutorialProgress) == "table"
 				and data.TutorialProgress.SecondRecycleSucceeded == nil
@@ -1522,7 +1447,7 @@ function PlayerDataService:_savePersistentData(player, state, maximumAttempts)
 		HandUpgradeLevels = copyHandUpgradeLevels(state.HandUpgradeLevels),
 		ToolUpgradeLevels = copyToolUpgradeLevels(state.ToolUpgradeLevels),
 		PlayerAttributeLevels = copyPlayerAttributeLevels(state.PlayerAttributeLevels),
-		LegacyAreaBagCapacityBonus = sanitizeWholeNumber(state.LegacyAreaBagCapacityBonus),
+		BagCapacityBonus = sanitizeWholeNumber(state.BagCapacityBonus),
 		LastEquippedTool = state.UnlockedTools[state.LastEquippedTool] == true
 			and ToolConfig.IsLeafCleaningTool(state.LastEquippedTool)
 			and state.LastEquippedTool
@@ -1888,7 +1813,7 @@ function PlayerDataService:ResetForRebirth(player, skipRebirthPurchaseId)
 		CoinFlipProgress = copyCoinFlipProgress(state.CoinFlipProgress),
 		PendingCoinFlip = copyPendingCoinFlip(state.PendingCoinFlip),
 		SelectedPermanentBagVisualId = sanitizeSelectedPermanentBagVisualId(state.SelectedPermanentBagVisualId),
-		LegacyAreaBagCapacityBonus = sanitizeWholeNumber(state.LegacyAreaBagCapacityBonus),
+		BagCapacityBonus = sanitizeWholeNumber(state.BagCapacityBonus),
 		ProcessedFriendRewardIds = sanitizeStringList(state.ProcessedFriendRewardIds, 200),
 		ProcessedSkipRebirthReceiptIds = processedSkipRebirthReceiptIds,
 		PendingFriendDeliveries = sanitizePendingFriendDeliveries(state.PendingFriendDeliveries),
@@ -2000,13 +1925,7 @@ function PlayerDataService:DeliverOfflineFriendReward(ownerUserId, delivery)
 			local isNewPlayer = type(rawData) ~= "table"
 			local data, dataResetPerformed = preparePersistentDataForCurrentReset(rawData, isNewPlayer)
 			local sourceSchemaVersion = data.SchemaVersion
-			migrateLegacyDiamondCurrency(data)
-			migrateRemovedSewerData(data)
-			migrateLegacyAreaBagCapacityBonus(
-				data,
-				sanitizeYardProgress(data.YardProgress, data.UnlockedAreas),
-				numericOwnerUserId
-			)
+			normalizeBagCapacityBonusField(data)
 			data.LuckyBoxOnboarding = sanitizeLuckyBoxOnboarding(
 				data.LuckyBoxOnboarding,
 				sourceSchemaVersion
@@ -2610,7 +2529,7 @@ function PlayerDataService:GetBagCapacity(state)
 	local bagConfig = getStorageBagConfig(state)
 	local baseCapacity = bagConfig.Capacity
 	return baseCapacity
-		+ sanitizeWholeNumber(state.LegacyAreaBagCapacityBonus)
+		+ sanitizeWholeNumber(state.BagCapacityBonus)
 		+ BagConfig.GetExpansionCapacityBonus(state.BagExpansionLevel)
 end
 
@@ -2824,7 +2743,7 @@ function PlayerDataService:GetSnapshot(player)
 		QuickSellOwnershipReady = quickSellOwnershipReady,
 		CurrentBagValue = state.CurrentBagValue,
 		BagCapacity = self:GetBagCapacity(state),
-		BagCapacityBonus = sanitizeWholeNumber(state.LegacyAreaBagCapacityBonus),
+		BagCapacityBonus = sanitizeWholeNumber(state.BagCapacityBonus),
 		BagFull = not instantRecycleEnabled and state.CurrentBagValue >= self:GetBagCapacity(state),
 		BagLevel = state.BagLevel,
 		BagExpansionLevel = sanitizeBagExpansionLevel(state.BagExpansionLevel),

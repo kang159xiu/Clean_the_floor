@@ -151,6 +151,7 @@ local remotes = runBootstrapStep("Remotes:CreateOrValidate", function()
 		LeafPickupBatch = getOrCreate(remotesFolder, "RemoteEvent", "LeafPickupBatch"),
 		BagFullPickupAttempt = getOrCreate(remotesFolder, "RemoteEvent", "BagFullPickupAttempt"),
 		CoinGainEvent = getOrCreate(remotesFolder, "RemoteEvent", "CoinGainEvent"),
+		CoinSpendEvent = getOrCreate(remotesFolder, "RemoteEvent", "CoinSpendEvent"),
 		RequestLostItemPickup = getOrCreate(remotesFolder, "RemoteEvent", "RequestLostItemPickup"),
 		LostItemRevealStarted = getOrCreate(remotesFolder, "RemoteEvent", "LostItemRevealStarted"),
 		LostItemRevealCompleted = getOrCreate(remotesFolder, "RemoteEvent", "LostItemRevealCompleted"),
@@ -330,7 +331,14 @@ initializeService("ToolGamePassService", function()
 	ToolGamePassService:Init(PlayerDataService, GamePassStationCollisionService)
 end)
 initializeService("AreaDoorService", function()
-	AreaDoorService:Init(PlayerDataService, remotes.RequestAreaUnlock, LeafService, PlaytestMetricsService)
+	AreaDoorService:Init(
+		PlayerDataService,
+		remotes.RequestAreaUnlock,
+		LeafService,
+		PlaytestMetricsService,
+		EconomyService,
+		remotes.CoinSpendEvent
+	)
 end)
 initializeService("PlayerAreaService", function()
 	PlayerAreaService:Init(PlayerDataService, PlaytestMetricsService)

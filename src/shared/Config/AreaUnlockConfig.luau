@@ -1,24 +1,32 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
+local RebirthConfig = require(ReplicatedStorage.Shared.Config.RebirthConfig)
 local RegionConfig = require(ReplicatedStorage.Shared.Config.RegionConfig)
 
 local AreaUnlockConfig = {
 	Order = {},
 	Areas = {},
 	ByDoorModelName = {},
+	CoinImage = "rbxassetid://140381046419252",
 }
 
-local minimumRebirthsByTargetAreaNumber = {
-	[5] = 1,
-	[6] = 2,
-	[7] = 3,
-	[8] = 4,
-	[9] = 7,
+local baseUnlockPricesByTargetAreaNumber = {
+	[2] = 150,
+	[3] = 800,
+	[4] = 1_800,
+	[5] = 3_000,
+	[6] = 4_650,
+	[7] = 6_500,
+	[8] = 8_500,
 }
 
 for targetAreaNumber = 2, RegionConfig.AreaCount do
 	local targetAreaId = string.format("Area_%02d", targetAreaNumber)
 	local requiredAreaNumber = targetAreaNumber - 1
+	local baseUnlockPrice = assert(
+		baseUnlockPricesByTargetAreaNumber[targetAreaNumber],
+		string.format("Missing base unlock price for %s", targetAreaId)
+	)
 	local config = {
 		TargetAreaId = targetAreaId,
 		TargetAreaNumber = targetAreaNumber,
@@ -26,7 +34,7 @@ for targetAreaNumber = 2, RegionConfig.AreaCount do
 		RequiredAreaNumber = requiredAreaNumber,
 		RequiredThroughAreaId = string.format("Area_%02d", requiredAreaNumber),
 		RequiredThroughAreaNumber = requiredAreaNumber,
-		MinimumRebirths = minimumRebirthsByTargetAreaNumber[targetAreaNumber] or 0,
+		BaseUnlockPrice = baseUnlockPrice,
 		DoorModelName = string.format("Door%02d", targetAreaNumber),
 	}
 	table.freeze(config)
@@ -50,13 +58,13 @@ function AreaUnlockConfig.IsClearRequirementMet(config, areas)
 	return true
 end
 
-function AreaUnlockConfig.GetRequirementStatus(config, areas, rebirthCount)
+function AreaUnlockConfig.GetUnlockPrice(config, rebirthCount)
 	if type(config) ~= "table" then
-		return false, false
+		return 0
 	end
-	local cleared = AreaUnlockConfig.IsClearRequirementMet(config, areas)
-	local rebirths = math.max(0, math.floor(tonumber(rebirthCount) or 0))
-	return cleared, rebirths >= config.MinimumRebirths
+	local basePrice = math.max(0, math.floor(tonumber(config.BaseUnlockPrice) or 0))
+	local leafCountMultiplier = RebirthConfig.GetLeafCountMultiplier(rebirthCount)
+	return math.max(0, math.floor(basePrice * leafCountMultiplier + 0.5))
 end
 
 table.freeze(AreaUnlockConfig.Order)

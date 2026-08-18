@@ -1,5 +1,7 @@
-# Project place file
-/pro.rbxlx
+# Project place files and generated verification builds
+/*.rbxlx
+/*.rbxl
+/.codex-*-sourcemap.json
 
 # Roblox Studio lock files
 /*.rbxlx.lock

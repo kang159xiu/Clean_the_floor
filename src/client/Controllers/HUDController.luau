@@ -36,6 +36,7 @@ local LEAF_HINT_FALLBACK_IMAGE = "rbxassetid://106760602256692"
 local AREA_COMPLETION_HOLD_DURATION = 3
 local COIN_GAIN_PULSE_SCALE = 1.15
 local COIN_GAIN_PULSE_HALF_DURATION = 0.04
+local COIN_SPEND_HOLD_DURATION = 1
 local DOUBLE_COIN_BASE_HOLD_DURATION = 0.3
 local DOUBLE_COIN_REVEAL_DURATION = 0.6
 local CENTER_REWARD_START_POSITION = UDim2.fromScale(0.5, 0.68)
@@ -291,6 +292,8 @@ function HUDController:Init(remotes)
 	self.CoinGainSerial = 0
 	self.CoinGainIdleSerial = 0
 	self.CoinGainPulseSerial = 0
+	self.CoinSpendSerial = 0
+	self.CoinSpendActive = false
 	self.LastCoinGainSequenceId = 0
 	self.PendingCoinTarget = nil
 	self.PendingCoinAmount = 0
@@ -477,6 +480,9 @@ function HUDController:Init(remotes)
 	end)
 	remotes.CoinGainEvent.OnClientEvent:Connect(function(event)
 		self:_receiveCoinGainEvent(event)
+	end)
+	remotes.CoinSpendEvent.OnClientEvent:Connect(function(event)
+		self:_receiveCoinSpendEvent(event)
 	end)
 end
 
@@ -1759,6 +1765,52 @@ function HUDController:_acceptCoinGainSequence(event)
 	return sequenceId
 end
 
+function HUDController:_cancelCoinSpendVisual()
+	self.CoinSpendSerial += 1
+	if not self.CoinSpendActive then
+		return
+	end
+	self.CoinSpendActive = false
+	if self.CoinGainTween then
+		self.CoinGainTween:Cancel()
+		self.CoinGainTween = nil
+	end
+	self.CoinGainScale.Scale = self.CoinGainBaseScale
+	self.CoinGainValue.Position = self.CoinGainOriginalPosition
+	self.CoinGainValue.Text = "+0"
+	self.CoinGainValue.Visible = false
+	self.CoinGainGradient.Enabled = self.CoinGainGradientOriginalEnabled
+end
+
+function HUDController:_receiveCoinSpendEvent(event)
+	if type(event) ~= "table" then
+		return
+	end
+	local amount = math.max(0, math.floor(tonumber(event.Amount) or 0))
+	local targetCoins = math.max(0, math.floor(tonumber(event.TargetCoins) or 0))
+	if amount <= 0 then
+		return
+	end
+
+	self:_cancelCoinGainAnimation(targetCoins)
+	self.LastCoins = targetCoins
+	self.CoinSpendSerial += 1
+	local serial = self.CoinSpendSerial
+	self.CoinSpendActive = true
+	self.CoinGainValue.Position = self.CoinGainOriginalPosition
+	self.CoinGainValue.Text = "-" .. CoinFormat.Compact(amount)
+	self.CoinGainValue.Visible = true
+	self.CoinGainGradient.Enabled = self.CoinGainGradientOriginalEnabled
+	self:_playCoinGainPulseOnce()
+	self:_playCoinsFramePulseOnce()
+
+	task.delay(COIN_SPEND_HOLD_DURATION, function()
+		if serial == self.CoinSpendSerial and self.CoinSpendActive then
+			self:_cancelCoinSpendVisual()
+		end
+	end)
+end
+
 function HUDController:_receiveCoinGainEvent(event)
 	if type(event) == "table" and event.SoundOnly == true then
 		if not self:_acceptCoinGainSequence(event) then
@@ -1767,6 +1819,7 @@ function HUDController:_receiveCoinGainEvent(event)
 		self:_queueCoinFeedbackSounds(event)
 		return
 	end
+	self:_cancelCoinSpendVisual()
 	if type(event) == "table" and event.CenterReward == true then
 		if not self:_acceptCoinGainSequence(event) then
 			return
@@ -1996,6 +2049,7 @@ function HUDController:_clearCoinGainStepQueue()
 end
 
 function HUDController:_cancelCoinGainAnimation(latestCoins, keepPresentationBusy)
+	self:_cancelCoinSpendVisual()
 	self.CoinGainSerial += 1
 	self.CoinGainIdleSerial += 1
 	self.CoinGainPulseSerial += 1

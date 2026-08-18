@@ -1,5 +1,7 @@
 # Studio对象与命名契约
 
+> 本文是精确Studio路径、名称、类型和可选性的唯一当前文档。玩家流程与代码责任请从`docs/features/README.md`进入；未连接目标Place时新增结构必须标记待Studio核验。
+
 > 本文件只描述当前源码实际读取的Studio接口。Studio中存在但尚未被服务连接的对象会明确标为“预放置”。
 
 ## Workspace区域结构
@@ -12,6 +14,9 @@ Workspace
 │  ├─ LostItemShop [Model]
 │  │  └─ upgrade [BasePart]
 │  │     └─ ProximityPrompt
+│  ├─ ground [Model]
+│  │  └─ 任意数量BasePart
+│  ├─ GeneratedLeaves [Folder，客户端运行时按需创建]
 │  ├─ Cow [Model，全部BasePart保持Anchored]
 │  │  └─ Direction [BasePart，LookVector朝牛头]
 │  └─ actionpoop [Folder]
@@ -44,7 +49,11 @@ Workspace
    ├─ Door [Model]
    │  └─ Door02..Door08 [Model]
    │     ├─ Door01 [BasePart]
-   │     │  └─ SurfaceGui.Frame.ImageButton.TextLabel
+   │     │  └─ SurfaceGui
+   │     │     ├─ Frame.ImageButton.TextLabel
+   │     │     └─ rebirth [Frame，保留历史对象名，运行时作为金币价格牌]
+   │     │        └─ ImageLabel [金币图标]
+   │     │           └─ x1 [TextLabel，运行时真实门价]
    │     └─ MB01/MB02 [Model，按实际门板数量]
    │        └─ angle [number属性，完全打开后的世界绝对Y角度，单位为度]
    ├─ Recycle_01 [BasePart，功能锚点]
@@ -72,9 +81,10 @@ Workspace
 - Workspace必须启用`StreamingEnabled`，并设置`StreamingMinRadius=64`、`StreamingTargetRadius=160`；这些值与`LeafVisibilityConfig`保持一致。
 - `ReplicatedStorage.miaobian.Highlight02`必须是`Highlight`，作为每个正式区域剩余最后100片时的收尾描边模板。客户端最多克隆5份，只设置名称、`Adornee`、`Enabled`和父级；模板当前橙色填充、白色外框及`AlwaysOnTop`样式由Studio维护。
 - `ReplicatedStorage.miaobian.Highlight03`必须是`Highlight`，作为幸运盒原地轮播期间随机模型的只读描边模板。客户端每轮克隆一份，只设置名称、`Adornee`和父级；`Adornee`必须是当前轮播模型内部的视觉`Model`，不能包含隐藏`upgrade`。轮播模型销毁时描边一并销毁，最终真实模型不使用该模板。
-- ground全部后代BasePart都是叶子生成和工具射线表面；服务启动时设置`Anchored=true`、`CanQuery=true`。
+- Area和`大厅装扮.ground`的全部后代BasePart都是各自的生成与工具射线表面；服务启动时设置`Anchored=true`、`CanQuery=true`。位于`大厅装扮`下但不在`ground` Model内部的同名Part不参与Lobby生成。
+- Lobby使用600个全服共享稳定池位，从Leaf1～16等概率选择外观、基础背包价值固定为1，并按每0.1秒一个空位激活。Lobby描述随当前庭院快照一同下发，客户端模型只放入`大厅装扮.GeneratedLeaves`；拾取计入背包、出售和清理榜，但不写`YardProgress`、不解锁区域且不推进教程或幸运箱。
 - 每区运行时写入`AreaCleaned`属性。`GenerationComplete`表示当前生成批次是否结束；只有`GameplayReady=true`的完整区域可以被工具和描边处理，`PreviewOnly=true`的100片预览只负责远景显示。
-- 启动只完整生成基础450片的Area_01，并为Area_02生成100片预览。任一区域清完后，下一地区仍保持100片预览；只有角色身体碰门并通过服务端顺序/重生验证后才补齐正式数量，同时为再下一区域生成100片预览。更远区域不生成，当前Area_08没有后继区域；Area_09不得生成预览或正式叶子。
+- 启动只完整生成基础450片的Area_01，并为Area_02生成100片预览。任一区域清完后，下一地区仍保持100片预览；只有角色身体碰门并通过服务端顺序、清理和金币扣款验证后才补齐正式数量，同时为再下一区域生成100片预览。更远区域不生成，当前Area_08没有后继区域；Area_09不得生成预览或正式叶子。
 - 普通失物不再以真实模型写入服务端`Area_XX.GeneratedLostItems`。个人地面箱克隆由客户端放在`Workspace.LocalLostItems`，原地揭晓克隆放在`Workspace.LocalLostItemReveals`；服务器仍保留计划、最终ID、位置、拾取、揭晓和奖励权威。Area_01～08在`GameplayReady=true`后建立3～6件新计划，并在随机清理节点于当前清扫点4 studs内直接生成对应等级箱子；Schema 30的首次180秒及后续300秒定时Lucky004/005复用同一容器和五个箱子模板，不要求新增世界对象。`GameHUD.HUDRoot.time.Value`必须是文字GUI对象，客户端只修改其`Text`并在节点缺失时安全关闭倒计时表现。旧轮已保存数量保持，地面快照只公开`LuckyTier`，不公开最终物品或价值。揭晓容器中的候选与最终模型按视觉Model包围盒中心对齐权威`RevealOriginCFrame`；12轮候选不得保留Billboard，最终0.25秒放大完成后挂接价值牌并展示2.5秒，再沿最高额外抬升1.5 studs的抛物线飞向开启者胸口。距离胸口目标超过2 studs时模型保持完整尺寸，进入2 studs后才缩小至15%；`GetDiamond`的首次获得提示只能在飞行结束且服务端确认入库后出现。
 - 重生不再使用`Workspace.Function`中的世界Part或`ProximityPrompt`；玩家统一通过`GameHUD.Frame.Rebirth`打开确认面板。
 - `Function.Leaderboards.WinsBoard`、`PlaytimeBoard`、`gold`和`POOP`共用排行榜对象契约。每个`SurfaceGui.ScrollingFrame.RowTemplate.Frame`必须保留直属`Amount/Rank/UserName [TextLabel]`；原始外层`RowTemplate`由客户端保持隐藏，生成行必须克隆完整`RowTemplate`并只在克隆内部Frame写内容，不能把内部Frame直接改挂到ScrollingFrame，否则比例行高会相对整个滚动区域放大。`ScrollingFrame`必须保留直属`UIListLayout`；客户端运行时设置`AutomaticCanvasSize=Y`、清零初始`CanvasSize`并启用纵向滚动，Studio继续负责模板行高、布局间距和滚动条样式。
@@ -88,20 +98,20 @@ Workspace
 
 ## 区域门
 
-- `DoorNN`表示目标区域N；`Area_(N-1).AreaCleaned=true`时免费解锁，否则可消耗对应`KeyNN`解锁。
-- 固定按钮路径为`DoorNN.Door01.SurfaceGui.Frame.ImageButton`，文字节点为其`TextLabel`。
-- 每个需要旋转的`MB01/MB02`模型必须直接设置number属性`angle`。它表示门完全打开后的世界绝对Y角度（度），允许负数；同一扇双开门的两个门板使用相同目标角度，确保打开后平行且朝同一方向。运行时保留关闭姿态的位置与X/Z旋转，只将目标Y旋转设为`angle`；尚未补属性的新增门板临时使用关闭Y角度`+90°`回退。
+- `DoorNN`表示目标区域N；Area_02～08必须按顺序解锁，清完Area_01到Area_(N-1)后再支付`AreaUnlockConfig`按当前Rebirth次数计算的金币门价。不存在Key或最低Rebirth次数替代路径。
+- 固定按钮路径为`DoorNN.Door01.SurfaceGui.Frame.ImageButton`，文字节点为其`TextLabel`；价格路径为`DoorNN.Door01.SurfaceGui.rebirth.ImageLabel.x1`。`rebirth`只是历史对象名，当前只承载金币图标和价格，不表示重生要求。
+- `ImageLabel.Image`使用与`HUDRoot.CoinsFrame.ImageLabel`相同的金币图片`rbxassetid://140381046419252`。客户端把`x1.Text`写为`x`加当前玩家真实紧凑门价，例如`x150/x1.8k`；Rebirth、快照或Streaming重载后必须刷新。同名目标门允许存在多个入口副本，当前Door03、Door04和Door07均有重复入口，所有副本必须显示同价且一次解锁后同步打开。
+- 每个`Door02～Door08`及其`MB01/MB02`保持`ModelStreamingMode=Atomic`。每个需要旋转的`MB01/MB02`模型必须直接设置number属性`angle`，表示门完全打开后的世界绝对Y角度（度）；运行时保留关闭姿态的位置与X/Z旋转，只将目标Y旋转设为`angle`，缺失属性时临时使用关闭Y角度`+90°`回退。
 - 锁定状态的`Door01.CanTouch`必须保持`true`；只有本地玩家身体碰撞会执行解锁请求，工具、Accessory、其他玩家和场景Part不会触发。`SurfaceGui.Frame.ImageButton`必须保留用于现有排版，但运行时始终不可点击。
-- 未解锁时显示“解锁区域N”并保留Studio外观与碰撞。
-- 当前玩家解锁后，所有区域中的同名DoorNN在该客户端变为RGB`207,207,207`、`Door01.CanCollide=false`、文字“区域N”，按钮不可交互。
-- 门不缩放、不移动、不隐藏，也不修改`CanTouch`、`CanQuery`或透明度。
+- 未解锁时显示`Unlock <Area DisplayName>`、当前金币门价，并恢复Studio外观与碰撞。余额不足、前置未清或访问别人庭院时服务端拒绝且不扣款。
+- 当前玩家解锁后，所有区域中的同名DoorNN在该客户端设置`Door01.Transparency=1`、`CanCollide/CanTouch/CanQuery=false`并关闭整个`SurfaceGui`；`MB01/MB02`在0.6秒内打开。首次载入已经解锁的门直接同步最终打开姿态，不重播动画。
 - `Workspace.AirWall["N"]`对应`Area_0N`的玩家空气墙；客户端按当前活动庭院的`StateSnapshot.UnlockedAreas`独立控制容器内全部后代BasePart。区域已解锁时本地设置`CanCollide=false`，未解锁时恢复各Part最初载入时的Studio值，不会影响同服其他玩家。
 - 老存档进入时立即应用已解锁状态；游戏内Rebirth重置区域进度后恢复碰撞。普通角色死亡复活不重新锁墙。`AirWall`、编号容器或内部Part受Streaming后加载时必须按最后一份快照补应用。
 
 ## 大厅与八区域通用回收对象
 
 - `Area_01～Area_08`都必须存在上述`Recycle_01`结构，服务端会逐区连接直接子级`ProximityPrompt`；Area_09回收对象不绑定。
-- `大厅装扮.Recycle_01`使用相同结构并记为逻辑来源`Lobby`，复用正常背包结算、金币奖励、统计、教程回调和世界动画；大厅不加入区域解锁或通关进度。
+- `大厅装扮.Recycle_01`使用相同结构并记为逻辑来源`Lobby`，复用正常背包结算、金币奖励、统计和世界动画；Lobby来源的拾取与回收不推进教程、区域解锁或通关进度。
 - 新结构的草堆动画目标为本区`Recycle_01.PulseVisual.grass.grass`。运行时按本次袋值逐个生成5～30片飞叶，间隔从0.1秒逐渐降至0.05秒；每片到达时让`PulseVisual`全部BasePart围绕Model Pivot从原尺寸短暂放大至1.08倍再恢复。最后一次脉冲结束后，草堆才沿Y轴缩放并补偿CFrame，使世界底部中心固定。`Recycle_01`必须保持固定BasePart并只作功能锚点，`RecycleEffects`必须留在`PulseVisual`外。旧路径`Recycle_01.grass.grass`只兼容草堆动画，不播放整体脉冲。
 - 袋满引导在大厅回收点与当前活动庭院已解锁区域的回收点之间选择离玩家最近的`Recycle_01`；本局前三个满袋周期常驻显示，第4次起停止显示。
 
@@ -399,7 +409,7 @@ StarterGui.GameHUD
 - `ToolFrame.ImageButton.Visible=false`。客户端按库存克隆按钮，`ImageLabel`只显示配置图片，`ToolName`只显示名称；键盘可用时`key`按当前槽位显示`1～9`，纯触屏或第10槽以后清空并隐藏；`number`继续独立显示失物堆叠数量`xN`，允许和`key`同时显示。`UIStroke`的粗细、透明度和缩放模式沿用Studio模板，客户端只按实际装备状态将颜色切换为已装备`#FFFFFF`、未装备`#808080`。现有横向`UIListLayout`负责居中和排序，Roblox默认Backpack栏由客户端关闭。
 - `invite.List.muban.name`显示在线玩家的`DisplayName`，`Image.Icon2`显示其HeadShot头像；`invite`向该玩家发送进入自己庭院的邀请，`visit yard`直接进入该玩家的庭院。`invite.nodabian.allowed`由客户端按权威`AllowGuestPoop`显示`Allowed/Blocked`；`GoHome`仅在访问别人庭院时显示并返回自己的庭院。客户端不得再等待旧节点`Title/Icon/ImageButton/jinru/nodabian.Title`。
 - `HUDRoot.jiaqun [GuiButton]`是官方社区入口；客户端连接其`Activated`事件，不覆盖Studio中的位置、尺寸、图片或文字。目标社区固定为Group ID `220344414`，使用Roblox原生加入界面而不是外部网页。服务端确认会员并发放一次性1000金币后，客户端只把当前玩家`PlayerGui`中的克隆设为隐藏；不得删除或隐藏StarterGui模板，否则未加入玩家将失去入口。
-- `CoinsFrame.Value`只显示金币数值，使用小于1k原样、达到1k后一位小数向上取整的小写紧凑格式，不添加`Coins:`等说明文字。`CoinsFrame.+Value`默认隐藏并使用`+0`，负责所有正向金币的累计/飞入动画；双倍金币时先显示`+基础值`，再显示无前导加号的`基础值x2`，不得为双倍阶段新增或移动Studio对象。失物金币会与`GetDiamond`中央提示同时开始，连续提交逐笔排队。
+- `CoinsFrame.Value`只显示金币数值，使用小于1k原样、达到1k后一位小数向上取整的小写紧凑格式，不添加`Coins:`等说明文字。`CoinsFrame.+Value`默认隐藏并使用`+0`：正向金币继续使用累计/飞入动画，双倍金币时先显示`+基础值`再显示无前导加号的`基础值x2`；区域门权威扣款成功时复用同一节点显示`-门价`并与整个CoinsFrame各脉冲一次，约1秒后恢复隐藏。扣款表现必须取消冲突的正向动画并采用`CoinSpendEvent.TargetCoins`，失败请求不得显示负数。失物金币会与`GetDiamond`中央提示同时开始，连续提交逐笔排队。
 - `TrailMultiplierDisplay.TrailMultiplierLabel`与`RebirthMultiplierDisplay.RebirthMultiplierLabel`是可选的只读倍率标签；存在时前者显示权威`PersonalLeafValueMultiplier`并与Value Multiplier升级卡的当前个人升级倍率一致，后者独立显示重生叶价倍率，固定格式为`Multiplier x数值 (Upgrade/Rebirth)`。两者都不得混入区域倍率，缺失或类型错误只跳过对应显示，不得阻断HUD及其他客户端控制器启动。
 - `GameHUD.Commodity`已废弃，客户端不再读取、等待或显示该对象；正确Place可保留隐藏模板，也可直接删除整个层级，不影响Bootstrap或世界购买台。
 - `GameHUD.HUDRoot.x2coins [GuiButton]`是独立双倍金币购买入口，不得放入`Commodity`轮换。它必须保留直属`Rb [TextLabel]`作为价格和直属`TextLabel`作为`x2 Cash`标题；客户端只写`Rb`，资格未就绪或拥有后隐藏，未拥有时常驻且点击打开Game Pass `1935165459`购买提示。

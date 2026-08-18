@@ -84,6 +84,7 @@ local remotes = {
 	LeafPickupBatch = getRemote("LeafPickupBatch"),
 	BagFullPickupAttempt = getRemote("BagFullPickupAttempt"),
 	CoinGainEvent = getRemote("CoinGainEvent"),
+	CoinSpendEvent = getRemote("CoinSpendEvent"),
 	RequestLostItemPickup = getRemote("RequestLostItemPickup"),
 	LostItemRevealStarted = getRemote("LostItemRevealStarted"),
 	LostItemRevealCompleted = getRemote("LostItemRevealCompleted"),

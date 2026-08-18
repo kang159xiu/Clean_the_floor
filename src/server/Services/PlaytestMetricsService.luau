@@ -5,6 +5,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
 local BagConfig = require(ReplicatedStorage.Shared.Config.BagConfig)
+local LeafConfig = require(ReplicatedStorage.Shared.Config.LeafConfig)
 local RegionConfig = require(ReplicatedStorage.Shared.Config.RegionConfig)
 local TutorialConfig = require(ReplicatedStorage.Shared.Config.TutorialConfig)
 
@@ -308,7 +309,7 @@ function PlaytestMetricsService:RecordLeafCollected(
 		self:_emit(player, "first_bag_full", elapsed, { AreaId = areaId })
 	end
 
-	if collectionMode == "Bag" then
+	if collectionMode == "Bag" and areaId ~= LeafConfig.Lobby.AreaId then
 		local funnel = self:_getEligibleOnboardingFunnel(player)
 		if funnel and funnel.CollectedLeaves < TutorialConfig.LeafGoal then
 			-- Record successful leaves, not BagValue: every call represents one leaf entering the bag.

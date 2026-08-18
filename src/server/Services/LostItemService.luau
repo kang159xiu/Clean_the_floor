@@ -1001,6 +1001,9 @@ function LostItemService:OnTeamLeafRemoved(
 	_,
 	yardOwnerUserId
 )
+	if areaId == LeafConfig.Lobby.AreaId then
+		return
+	end
 	if influencingPlayer and typeof(collectedPosition) == "Vector3" then
 		local playerSession = self:_ensurePlayerSession(influencingPlayer)
 		playerSession.LastCollectedPositions[areaId] = collectedPosition

@@ -53,8 +53,11 @@ function BagService:TryAdd(player, amount, shouldPush, sourceOwnerUserId)
 
 	local added = math.min(remaining, amount)
 	state.CurrentBagValue += added
-	local activeYardOwnerUserId = state.ActiveYardOwnerUserId or player.UserId
-	local sourceKey = tostring(activeYardOwnerUserId)
+	local ownerUserId = math.floor(tonumber(sourceOwnerUserId) or state.ActiveYardOwnerUserId or player.UserId)
+	if ownerUserId <= 0 then
+		ownerUserId = player.UserId
+	end
+	local sourceKey = tostring(ownerUserId)
 	state.BagSourceValues[sourceKey] = (state.BagSourceValues[sourceKey] or 0) + added
 	self.PlayerDataService:MarkPersistentDirty(player)
 
