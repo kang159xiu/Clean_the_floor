@@ -484,6 +484,9 @@ function LeafService:Init(playerDataService, bagService, toolActionService, metr
 			for _, areaState in leavingYard.Areas do
 				self:_invalidateRefillPreparation(areaState)
 			end
+			for _, areaState in leavingYard.ResetAreas or {} do
+				self:_invalidateRefillPreparation(areaState)
+			end
 		end
 		task.delay(3, function()
 			local yard = self.Yards[player]
@@ -578,6 +581,8 @@ function LeafService:_makeYard(owner)
 		Owner = owner,
 		OwnerUserId = owner.UserId,
 		Areas = {},
+		ResetAreas = {},
+		ResetRunSerial = 0,
 		LeavesById = {},
 		Revision = 0,
 		Preparing = true,
@@ -998,6 +1003,9 @@ function LeafService:_queryHandPickupLeaves(yard, center, radius)
 	for _, areaState in yard.Areas do
 		queryAreaStates[#queryAreaStates + 1] = areaState
 	end
+	for _, areaState in yard.ResetAreas or {} do
+		queryAreaStates[#queryAreaStates + 1] = areaState
+	end
 	local lobbyAreaState = self.LobbyYard
 		and self.LobbyYard ~= yard
 		and self.LobbyYard.Areas[LeafConfig.Lobby.AreaId]
@@ -1081,6 +1089,13 @@ function LeafService:_queryYardLeaves(yard, center, radius)
 		return leaves
 	end
 	for _, areaState in yard.Areas do
+		if areaState.Generated then
+			for _, leaf in self:_queryAreaLeaves(areaState, center, radius) do
+				table.insert(leaves, leaf)
+			end
+		end
+	end
+	for _, areaState in yard.ResetAreas or {} do
 		if areaState.Generated then
 			for _, leaf in self:_queryAreaLeaves(areaState, center, radius) do
 				table.insert(leaves, leaf)
@@ -1467,10 +1482,11 @@ function LeafService:_activateNextPendingLeaf(areaState, isRefill)
 	end
 
 	local leaf = {
-		Id = string.format("%s_%05d", areaState.AreaId, leafIndex),
+		Id = string.format("%s_%05d", areaState.IdPrefix or areaState.AreaId, leafIndex),
 		Yard = areaState.Yard,
 		AreaId = areaState.AreaId,
 		AreaState = areaState,
+		IsResetCoin = areaState.IsResetCoin == true,
 		LeafType = leafType,
 		BagValue = leafTypeConfig.BagValue,
 		BoundingCFrame = boundingCFrame,
@@ -1495,13 +1511,18 @@ end
 
 function LeafService:_isCurrentAreaState(areaState)
 	local yard = areaState and areaState.Yard
-	if not yard or areaState.Cancelled == true or yard.Areas[areaState.AreaId] ~= areaState then
+	if not yard or areaState.Cancelled == true then
 		return false
 	end
 	if yard.IsLobby == true then
-		return self.LobbyYard == yard
+		return self.LobbyYard == yard and yard.Areas[areaState.AreaId] == areaState
 	end
-	return self.Yards[yard.Owner] == yard
+	if areaState.IsResetCoin == true then
+		return self.Yards[yard.Owner] == yard
+			and yard.ResetAreas
+			and yard.ResetAreas[areaState.AreaId] == areaState
+	end
+	return self.Yards[yard.Owner] == yard and yard.Areas[areaState.AreaId] == areaState
 end
 
 function LeafService:_getDesiredActiveLeafCount(areaState)
@@ -1767,11 +1788,185 @@ function LeafService:_prepareOwnerYard(owner)
 	self:_queueProgressSnapshot(yard, true)
 end
 
+function LeafService:_discardResetAreaState(yard, areaId, sendDelta)
+	local areaState = yard.ResetAreas and yard.ResetAreas[areaId] or nil
+	if not areaState then
+		return
+	end
+	areaState.Cancelled = true
+	areaState.RefillToken = (areaState.RefillToken or 0) + 1
+	self:_invalidateRefillPreparation(areaState)
+	local leafIds = {}
+	for _, leaf in areaState.Leaves do
+		if yard.LeavesById[leaf.Id] == leaf then
+			yard.LeavesById[leaf.Id] = nil
+			self:_removeLeafFromGrid(leaf)
+			self:_removeLeafFromHandPickupGrid(leaf)
+			activeMovingLeaves[leaf] = nil
+			yard.PendingMoveLeaves[leaf.Id] = nil
+			leafIds[#leafIds + 1] = leaf.Id
+		end
+	end
+	yard.ResetAreas[areaId] = nil
+	if sendDelta == true and #leafIds > 0 then
+		self:_sendDelta(yard, {
+			Kind = "Remove",
+			LeafIds = leafIds,
+		})
+	end
+end
+
+function LeafService:_createResetAreaState(yard, areaId, resetRunSerial)
+	local definition = self.AreaDefinitions[areaId]
+	local region = RegionConfig[areaId]
+	local ownerState = self.PlayerDataService:GetState(yard.Owner)
+	if not definition or not region or not ownerState then
+		return nil
+	end
+	local multiplier = RebirthConfig.GetLeafCountMultiplier(ownerState.RebirthCount)
+	local targetCount = math.max(1, math.floor(definition.FullTargetLeafCount * multiplier + 0.5))
+	local refillPreparedPositionsByLeafType, refillPreparedTargetsByLeafType =
+		self:_createRefillPreparationCollections(areaId)
+	local areaState = {
+		IsResetCoin = true,
+		ResetRunSerial = resetRunSerial,
+		IdPrefix = string.format("Reset_%04d_%s", resetRunSerial, areaId),
+		AreaId = areaId,
+		Definition = definition,
+		Region = region,
+		Yard = yard,
+		Generated = true,
+		PreviewOnly = false,
+		GeneratedLeafCount = targetCount,
+		TotalLeafCount = targetCount,
+		CollectedLeafCount = 0,
+		TotalValue = 0,
+		CollectedValue = 0,
+		Completed = false,
+		Leaves = {},
+		LeafGrid = {},
+		HandPickupGrid = {},
+		SequenceSeed = normalizeRandomSeed(
+			region.Seed
+				+ (yard.OwnerUserId % 100_000) * 7_919
+				+ resetRunSerial * 104_729
+		),
+		NextLeafIndex = 1,
+		PendingLeafCount = targetCount,
+		RefillQueued = false,
+		RefillToken = 0,
+		RefillPreparedPositionsByLeafType = refillPreparedPositionsByLeafType,
+		RefillPreparedPositionCount = 0,
+		RefillPreparedTargetsByLeafType = refillPreparedTargetsByLeafType,
+		RefillPreparationSerial = 0,
+		RefillPreparationToken = 1,
+		RefillPreparationRegistered = false,
+		Cancelled = false,
+	}
+	yard.ResetAreas[areaId] = areaState
+
+	for index = 1, targetCount do
+		local leafType = self:_getLeafTypeForIndex(areaState, index)
+		areaState.TotalValue += LeafConfig.Types[leafType].BagValue
+		if index % POPULATION_CALCULATION_BATCH_SIZE == 0 then
+			task.wait()
+		end
+	end
+
+	local initialActiveCount = math.min(targetCount, MAXIMUM_ACTIVE_LEAVES)
+	for index = 1, initialActiveCount do
+		if not self:_activateNextPendingLeaf(areaState, false) then
+			break
+		end
+		if index % GENERATION_BATCH_SIZE == 0 then
+			task.wait()
+		end
+	end
+	self:_registerRefillPreparation(areaState)
+	self:_queueAreaRefill(areaState)
+	return areaState
+end
+
+function LeafService:HasActiveResetCoins(player)
+	local yard = self.Yards[player]
+	if not yard then
+		return false
+	end
+	for _, areaState in yard.ResetAreas or {} do
+		if areaState.Cancelled ~= true and areaState.Completed ~= true then
+			return true
+		end
+	end
+	return false
+end
+
+function LeafService:ResetCompletedAreaCoins(player)
+	local state = self.PlayerDataService:GetState(player)
+	local yard = self.Yards[player]
+	if not state or not yard or not yard.Ready then
+		return false, "Your yard is not ready."
+	end
+	if self.YardService:GetActiveOwner(player) ~= player then
+		return false, "Return to your yard before resetting coins."
+	end
+	if self:HasActiveResetCoins(player) then
+		return false, "Collect all reset coins before resetting again."
+	end
+
+	local targetAreaIds = {}
+	local savedAreas = state.YardProgress and state.YardProgress.Areas or {}
+	for areaNumber, areaId in RegionConfig.Order do
+		if state.UnlockedAreas[areaId] == true then
+			local savedArea = savedAreas[areaId]
+			local clearedRatio = math.clamp(
+				tonumber(type(savedArea) == "table" and savedArea.ClearedRatio) or 0,
+				0,
+				1
+			)
+			if clearedRatio < 1 then
+				return false, string.format(
+					"Area %d is not fully cleared. Reset unavailable.",
+					areaNumber
+				)
+			end
+			targetAreaIds[#targetAreaIds + 1] = areaId
+		end
+	end
+	if #targetAreaIds == 0 then
+		return false, "No cleared areas are ready to reset."
+	end
+
+	yard.ResetRunSerial += 1
+	local resetRunSerial = yard.ResetRunSerial
+	for _, areaId in RegionConfig.Order do
+		self:_discardResetAreaState(yard, areaId, false)
+	end
+	for _, areaId in targetAreaIds do
+		if self.Yards[player] ~= yard or not self:_createResetAreaState(yard, areaId, resetRunSerial) then
+			for _, rollbackAreaId in targetAreaIds do
+				self:_discardResetAreaState(yard, rollbackAreaId, false)
+			end
+			self:SendSnapshotToMembers(yard)
+			return false, "Unable to reset area coins right now."
+		end
+	end
+	self:SendSnapshotToMembers(yard)
+	self:_queueProgressSnapshot(yard, true)
+	return true, string.format(
+		"Reset coins restored in %d cleared area%s.",
+		#targetAreaIds,
+		if #targetAreaIds == 1 then "" else "s"
+	), #targetAreaIds
+end
+
 function LeafService:ResetOwnerYard(owner)
 	local oldYard = self.Yards[owner]
 	if oldYard then
 		oldYard.Ready = false
 		for _, areaState in oldYard.Areas do
+			self:_invalidateRefillPreparation(areaState)
+		end
+		for _, areaState in oldYard.ResetAreas or {} do
 			self:_invalidateRefillPreparation(areaState)
 		end
 		for leaf in oldYard.LeavesById do
@@ -1875,6 +2070,14 @@ function LeafService:SendSnapshot(player)
 				Completed = areaState.Completed,
 			})
 			for _, leaf in areaState.Leaves do
+				table.insert(leaves, self:_serializeLeaf(leaf, snapshotMotionSampleTime))
+			end
+		end
+	end
+	for _, areaId in RegionConfig.Order do
+		local resetAreaState = yard.ResetAreas and yard.ResetAreas[areaId] or nil
+		if resetAreaState then
+			for _, leaf in resetAreaState.Leaves do
 				table.insert(leaves, self:_serializeLeaf(leaf, snapshotMotionSampleTime))
 			end
 		end
@@ -2809,6 +3012,36 @@ function LeafService:_recordAreaRemoval(leaf, collectionMode, influencingPlayer)
 		)
 		return
 	end
+	if areaState.IsResetCoin == true then
+		areaState.CollectedValue = math.min(areaState.TotalValue, areaState.CollectedValue + leaf.BagValue)
+		areaState.CollectedLeafCount = math.min(
+			areaState.TotalLeafCount,
+			areaState.CollectedLeafCount + 1
+		)
+		self:_notifyLeafCollectedHandlers(
+			influencingPlayer,
+			leaf.AreaId,
+			leaf.BoundingCFrame.Position,
+			areaState.CollectedLeafCount,
+			collectionMode,
+			leaf.Yard.OwnerUserId,
+			{
+				Kind = "ResetCoin",
+				ResetRunSerial = areaState.ResetRunSerial,
+			}
+		)
+		if areaState.CollectedLeafCount >= areaState.TotalLeafCount then
+			areaState.Completed = true
+			areaState.RefillToken += 1
+			areaState.RefillQueued = false
+			areaState.PendingLeafCount = 0
+			self:_invalidateRefillPreparation(areaState)
+		else
+			self:_queueAreaRefill(areaState)
+		end
+		self:_queueProgressSnapshot(leaf.Yard, false)
+		return
+	end
 	areaState.CollectedValue = math.min(areaState.TotalValue, areaState.CollectedValue + leaf.BagValue)
 	areaState.CollectedLeafCount = math.min(areaState.TotalLeafCount, areaState.CollectedLeafCount + 1)
 	local ownerState = self.PlayerDataService:GetState(leaf.Yard.Owner)
@@ -2825,7 +3058,8 @@ function LeafService:_recordAreaRemoval(leaf, collectionMode, influencingPlayer)
 		leaf.BoundingCFrame.Position,
 		areaState.CollectedLeafCount,
 		collectionMode,
-		leaf.Yard.OwnerUserId
+		leaf.Yard.OwnerUserId,
+		{ Kind = "Progression" }
 	)
 	if areaState.TotalValue > 0 and areaState.CollectedValue >= areaState.TotalValue then
 		self:_completeArea(leaf.Yard, areaState)
@@ -2964,7 +3198,7 @@ function LeafService:_collectLeaf(player, leaf, deferSnapshot, collectionBatch)
 	end
 	local collectionMode = if storageMode == "InstantRecycle" then "InstantRecycle" else "Bag"
 	self:_recordAreaRemoval(leaf, collectionMode, player)
-	if storageMode == "InstantRecycle" then
+	if storageMode == "InstantRecycle" and leaf.IsResetCoin ~= true then
 		self:_notifyInstantRecycleCompleted(
 			player,
 			leaf.AreaId,
@@ -2978,7 +3212,7 @@ function LeafService:_collectLeaf(player, leaf, deferSnapshot, collectionBatch)
 	else
 		self:_notifyLeafStateChanged(player)
 	end
-	if self.MetricsService then
+	if self.MetricsService and leaf.IsResetCoin ~= true then
 		local areaProgress = if leaf.IsLobby == true
 			then 0
 			else leaf.AreaState.TotalValue > 0
@@ -3143,7 +3377,8 @@ function LeafService:_notifyLeafCollectedHandlers(
 	position,
 	collectedLeafCount,
 	collectionMode,
-	yardOwnerUserId
+	yardOwnerUserId,
+	collectionContext
 )
 	for _, handler in self.LeafCollectedHandlers do
 		local success, message = pcall(
@@ -3153,7 +3388,8 @@ function LeafService:_notifyLeafCollectedHandlers(
 			position,
 			collectedLeafCount,
 			collectionMode,
-			yardOwnerUserId
+			yardOwnerUserId,
+			collectionContext
 		)
 		if not success then warn("Leaf-collected handler failed: " .. tostring(message)) end
 	end

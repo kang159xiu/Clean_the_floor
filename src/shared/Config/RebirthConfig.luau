@@ -5,6 +5,8 @@ local RebirthConfig = {
 	LeafValueMultiplierPerRebirth = 1.5,
 	PriceMultiplierPerRebirth = 2,
 	RainbowPoopPerRebirth = 5,
+	MinimumRequiredAreaCount = 4,
+	MaximumRequiredAreaCount = 8,
 }
 
 function RebirthConfig.NormalizeCount(value)
@@ -23,6 +25,35 @@ end
 
 function RebirthConfig.GetRainbowPoopRequiredCount(rebirthCount)
 	return (RebirthConfig.NormalizeCount(rebirthCount) + 1) * RebirthConfig.RainbowPoopPerRebirth
+end
+
+function RebirthConfig.GetRequiredAreaCount(unlockedAreas)
+	local requiredAreaCount = RebirthConfig.MinimumRequiredAreaCount
+	local unlocked = type(unlockedAreas) == "table" and unlockedAreas or {}
+	for areaNumber = RebirthConfig.MinimumRequiredAreaCount + 1, RebirthConfig.MaximumRequiredAreaCount do
+		if unlocked[string.format("Area_%02d", areaNumber)] == true then
+			requiredAreaCount = areaNumber
+		end
+	end
+	return requiredAreaCount
+end
+
+function RebirthConfig.GetRequirementText(unlockedAreas, rainbowPoopFoundCount, rainbowPoopRequiredCount)
+	local requiredPoopCount = math.max(
+		1,
+		math.floor(tonumber(rainbowPoopRequiredCount) or RebirthConfig.RainbowPoopPerRebirth)
+	)
+	local foundPoopCount = math.clamp(
+		math.floor(tonumber(rainbowPoopFoundCount) or 0),
+		0,
+		requiredPoopCount
+	)
+	return string.format(
+		"Clear Areas 1-%d or find %d/%d",
+		RebirthConfig.GetRequiredAreaCount(unlockedAreas),
+		foundPoopCount,
+		requiredPoopCount
+	)
 end
 
 function RebirthConfig.GetPriceMultiplier(rebirthCount)

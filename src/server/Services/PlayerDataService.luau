@@ -22,7 +22,7 @@ local TutorialConfig = require(ReplicatedStorage.Shared.Config.TutorialConfig)
 local PlayerDataService = {}
 
 local DATASTORE_NAME = "CleanTheFloor_PlayerCollectibles_v1"
-local DATA_SCHEMA_VERSION = 32
+local DATA_SCHEMA_VERSION = 33
 local ONBOARDING_FUNNEL_VERSION = 1
 local ONBOARDING_FUNNEL_MAX_STEP = 10
 local CLEAR_SPEEDRUN_VERSION = 2
@@ -326,86 +326,6 @@ end
 
 local function copyLuckyBoxOnboarding(source)
 	return sanitizeLuckyBoxOnboarding(source, DATA_SCHEMA_VERSION)
-end
-
-local function sanitizeLostItemRunProgress(rawProgress, rebirthCount, sourceSchemaVersion, expireUnopened)
-	local normalizedRebirthCount = RebirthConfig.NormalizeCount(rebirthCount)
-	local normalizedSourceSchemaVersion = math.floor(tonumber(sourceSchemaVersion) or 0)
-	local result = {
-		RebirthCount = normalizedRebirthCount,
-		Areas = {},
-	}
-	if
-		type(rawProgress) ~= "table"
-		or RebirthConfig.NormalizeCount(rawProgress.RebirthCount) ~= normalizedRebirthCount
-		or type(rawProgress.Areas) ~= "table"
-	then
-		return result
-	end
-
-	for _, areaId in RegionConfig.PersistentOrder do
-		local areaConfig = LostItemConfig.Areas[areaId]
-		local rawArea = rawProgress.Areas[areaId]
-		if areaConfig and type(rawArea) == "table" and type(rawArea.Items) == "table" then
-			local items = {}
-			for _, rawItem in ipairs(rawArea.Items) do
-				local lostItemId = type(rawItem) == "table" and rawItem.LostItemId or nil
-				local itemConfig = lostItemId and LostItemConfig.Types[lostItemId] or nil
-				local triggerProgress = tonumber(type(rawItem) == "table" and rawItem.TriggerProgress)
-				if
-					itemConfig
-					and itemConfig.PoopOnly ~= true
-					and triggerProgress
-					and triggerProgress == triggerProgress
-					and triggerProgress > -math.huge
-					and triggerProgress < math.huge
-				then
-					local found = rawItem.Found == true
-					local redeemed = found and rawItem.Redeemed == true
-					local triggered = rawItem.Triggered == true or found or redeemed
-					local expired = not found
-						and (rawItem.Expired == true
-							or (normalizedSourceSchemaVersion < 31 and triggered)
-							or (expireUnopened == true and triggered))
-					local timedRewardKind = rawItem.TimedRewardKind
-					if
-						timedRewardKind ~= LostItemConfig.TimedLuckyBox.RewardKinds.First
-						and timedRewardKind ~= LostItemConfig.TimedLuckyBox.RewardKinds.Recurring
-					then
-						timedRewardKind = if rawItem.TimedOnboardingReward == true
-							then LostItemConfig.TimedLuckyBox.RewardKinds.First
-							else nil
-					end
-					table.insert(items, {
-						LostItemId = lostItemId,
-						TriggerProgress = math.clamp(triggerProgress, 0, 1),
-						Triggered = triggered or expired,
-						Found = found,
-						Redeemed = redeemed,
-						Expired = expired,
-						Guaranteed = rawItem.Guaranteed == true,
-						TimedRewardKind = timedRewardKind,
-					})
-				end
-			end
-			if #items > 0 then
-				local baseSpawnCount = math.clamp(
-					sanitizeWholeNumber(rawArea.BaseSpawnCount),
-					areaConfig.MinimumSpawnCount,
-					areaConfig.MaximumSpawnCount
-				)
-				result.Areas[areaId] = {
-					BaseSpawnCount = baseSpawnCount,
-					Items = items,
-				}
-			end
-		end
-	end
-	return result
-end
-
-local function copyLostItemRunProgress(source, rebirthCount)
-	return sanitizeLostItemRunProgress(source, rebirthCount, DATA_SCHEMA_VERSION, true)
 end
 
 local function sanitizeCodexClaimedTiers(rawTiers)
@@ -1215,12 +1135,6 @@ local function makeDefaultState(
 	local yardProgress = sanitizeYardProgress(data.YardProgress, data.UnlockedAreas)
 	local playerAttributeLevels = sanitizePlayerAttributeLevels(data.PlayerAttributeLevels)
 	local rebirthCount = RebirthConfig.NormalizeCount(data.RebirthCount)
-	local lostItemRunProgress = sanitizeLostItemRunProgress(
-		data.LostItemRunProgress,
-		rebirthCount,
-		data.SchemaVersion,
-		false
-	)
 	local luckyBoxOnboarding = sanitizeLuckyBoxOnboarding(data.LuckyBoxOnboarding, data.SchemaVersion)
 	local effectiveModifiers = calculateEffectiveModifiers(
 		playerAttributeLevels,
@@ -1314,7 +1228,6 @@ local function makeDefaultState(
 			sanitizeWholeNumber(data.RainbowPoopFoundCount),
 			RebirthConfig.GetRainbowPoopRequiredCount(rebirthCount)
 		),
-		LostItemRunProgress = lostItemRunProgress,
 		LuckyBoxOnboarding = luckyBoxOnboarding,
 		CollectedCounts = sanitizeCollectedCounts(persistentData and persistentData.CollectedCounts),
 		CodexClaimedTiers = sanitizeCodexClaimedTiers(persistentData and persistentData.CodexClaimedTiers),
@@ -1331,7 +1244,7 @@ local function makeDefaultState(
 			)
 			or type(data.OnboardingFunnel) ~= "table"
 			or type(data.ClearSpeedrun) ~= "table"
-			or type(data.LostItemRunProgress) ~= "table"
+			or data.LostItemRunProgress ~= nil
 			or type(data.LuckyBoxOnboarding) ~= "table"
 			or (
 				type(data.LuckyBoxOnboarding) == "table"
@@ -1474,7 +1387,6 @@ function PlayerDataService:_savePersistentData(player, state, maximumAttempts)
 			sanitizeWholeNumber(state.RainbowPoopFoundCount),
 			RebirthConfig.GetRainbowPoopRequiredCount(state.RebirthCount)
 		),
-		LostItemRunProgress = copyLostItemRunProgress(state.LostItemRunProgress, state.RebirthCount),
 		LuckyBoxOnboarding = copyLuckyBoxOnboarding(state.LuckyBoxOnboarding),
 		CollectedCounts = copyCollectedCounts(state.CollectedCounts),
 		CodexClaimedTiers = copyCodexClaimedTiers(state.CodexClaimedTiers),

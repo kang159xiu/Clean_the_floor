@@ -46,17 +46,15 @@ local revealAnimation = table.freeze({
 	FinalGrowDuration = 0.25,
 
 	-- Lucky-box world reveal timing and presentation.
-	FinalHoldDuration = 2.5,
-	FlyToPlayerDuration = 0.45,
+	FinalHoldDuration = 0.5,
+	FlyToPlayerDuration = 0.65,
 	FlyArcHeight = 1.5,
-	FlyShrinkDistance = 2,
-	FlyEndScale = 0.15,
 	ValueFadeDuration = 0.15,
 	MaximumDisplaySize = 2.5,
 	NearbyViewerRadius = 50,
 })
-local minimumSpawnCount = 3
-local maximumSpawnCount = 6
+local LUCKY_BOX_LEAF_INTERVAL = 200
+local LUCKY_BOX_SPAWN_CHANCE = 0.05
 local timedLuckyBox = table.freeze({
 	FirstDelaySeconds = 180,
 	RecurringDelaySeconds = 300,
@@ -74,11 +72,6 @@ local timedLuckyBox = table.freeze({
 		Recurring = "TimedRecurringHighTierReward",
 	}),
 })
-local spawnModes = table.freeze({
-	Immediate = "Immediate",
-	Progressive = "Progressive",
-})
-
 local rarityDefinitions = {
 	Common = {
 		Id = "Common",
@@ -206,19 +199,42 @@ end
 
 local function usesLeafValueMultiplier(lostItemId)
 	local config = type(lostItemId) == "string" and types[lostItemId] or nil
-	return config ~= nil and config.PoopOnly ~= true
+	return config ~= nil
 end
 
 local function isPoopItemId(lostItemId)
 	return type(lostItemId) == "string" and poopTierById[lostItemId] ~= nil
 end
 
-local function getPoopRedeemCoinValue(lostItemId, isCreator)
+local function normalizeRedeemMultiplier(value)
+	local multiplier = tonumber(value)
+	if
+		multiplier == nil
+		or multiplier ~= multiplier
+		or multiplier == math.huge
+		or multiplier == -math.huge
+	then
+		return 1
+	end
+	return math.max(0, multiplier)
+end
+
+local function scaleRedeemCoinValue(baseCoinValue, multiplier)
+	local scaledValue = math.max(0, math.floor(tonumber(baseCoinValue) or 0))
+		* normalizeRedeemMultiplier(multiplier)
+	if scaledValue == math.huge then
+		return MAX_REDEEM_COIN_VALUE
+	end
+	return math.min(MAX_REDEEM_COIN_VALUE, math.max(0, math.floor(scaledValue)))
+end
+
+local function getPoopRedeemCoinValue(lostItemId, isCreator, leafValueMultiplier)
 	local tier = type(lostItemId) == "string" and poopTierById[lostItemId] or nil
 	if not tier then
 		return 0
 	end
-	return if isCreator == true then poopTiers[1].CoinValue else tier.CoinValue
+	local baseCoinValue = if isCreator == true then poopTiers[1].CoinValue else tier.CoinValue
+	return scaleRedeemCoinValue(baseCoinValue, leafValueMultiplier)
 end
 
 local function choosePoopItemId(random)
@@ -246,20 +262,7 @@ local function getRedeemCoinValue(lostItemId, leafValueMultiplier)
 		return baseCoinValue
 	end
 
-	local multiplier = tonumber(leafValueMultiplier)
-	if
-		multiplier == nil
-		or multiplier ~= multiplier
-		or multiplier == math.huge
-		or multiplier == -math.huge
-	then
-		multiplier = 1
-	end
-	local scaledValue = baseCoinValue * math.max(0, multiplier)
-	if scaledValue == math.huge then
-		return MAX_REDEEM_COIN_VALUE
-	end
-	return math.min(MAX_REDEEM_COIN_VALUE, math.max(0, math.floor(scaledValue)))
+	return scaleRedeemCoinValue(baseCoinValue, leafValueMultiplier)
 end
 
 local rarityProfiles = {
@@ -286,9 +289,6 @@ for areaNumber = 1, RegionConfig.PersistentAreaCount do
 	end
 	assert(totalProbability == 100, areaId .. " rarity probabilities must total 100")
 	areas[areaId] = table.freeze({
-		SpawnMode = spawnModes.Progressive,
-		MinimumSpawnCount = minimumSpawnCount,
-		MaximumSpawnCount = maximumSpawnCount,
 		RarityProbabilities = table.freeze(profile),
 	})
 end
@@ -304,12 +304,6 @@ table.freeze(order)
 table.freeze(templateOrder)
 table.freeze(types)
 table.freeze(areas)
-
-local function chooseBaseSpawnCount(random, areaId)
-	local area = areas[areaId]
-	assert(area, "Unknown lost item area: " .. tostring(areaId))
-	return random:NextInteger(area.MinimumSpawnCount, area.MaximumSpawnCount)
-end
 
 local function chooseRarityId(random, areaId)
 	local area = areas[areaId]
@@ -400,6 +394,9 @@ local LostItemConfig = {
 	ChoosePoopItemId = choosePoopItemId,
 	RevealAnimation = revealAnimation,
 	TimedLuckyBox = timedLuckyBox,
+	LuckyBoxLeafInterval = LUCKY_BOX_LEAF_INTERVAL,
+	LuckyBoxSpawnChance = LUCKY_BOX_SPAWN_CHANCE,
+	MaximumSpawnIdLength = 128,
 	LuckyTierCount = #rarityOrder,
 	NormalizeLuckyTier = normalizeLuckyTier,
 	GetLuckyTier = getLuckyTier,
@@ -414,9 +411,6 @@ local LostItemConfig = {
 	IdsByRarity = idsByRarity,
 	Types = types,
 	Areas = areas,
-	SpawnModes = spawnModes,
-	MinimumSpawnCount = minimumSpawnCount,
-	MaximumSpawnCount = maximumSpawnCount,
 	ProgressiveSpawnRadius = 4,
 	ProgressiveSpawnGroundAttempts = 8,
 	LeafClearancePadding = 0.25,
@@ -425,7 +419,6 @@ local LostItemConfig = {
 	PoopTiers = poopTiers,
 	PoopTierById = poopTierById,
 	PoopTotalWeight = poopTotalWeight,
-	ChooseBaseSpawnCount = chooseBaseSpawnCount,
 	ChooseRarityId = chooseRarityId,
 	ChooseLostItemId = chooseLostItemId,
 }

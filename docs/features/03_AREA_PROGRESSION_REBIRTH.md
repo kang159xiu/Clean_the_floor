@@ -6,7 +6,7 @@
 
 ## 玩家流程
 
-玩家从Area_01开始，清完所有前置区域后由引导到门前并支付金币解锁下一域；Area_02～08都使用金币门价，不再使用最低Rebirth次数。完成基础区域及本轮主动解锁区域，或达到彩虹便便条件后，可普通Rebirth；SKIP购买只跳过资格，不改变重置结果。
+玩家从Area_01开始，清完所有前置区域后由引导到门前并支付金币解锁下一域；Area_02～08都使用金币门价，不再使用最低Rebirth次数或“重生自动开门”。普通Rebirth需清完Area_01～04以及本轮主动购买的所有更远区域；达到本轮彩虹便便数量可替代清区条件。SKIP购买只跳过资格，不改变重置结果。
 
 ## 服务端权威
 
@@ -18,11 +18,11 @@
 
 ## 数据流
 
-叶子完成状态与Rebirth次数 -> 玩家碰门 -> 服务端计算门价并原子扣款/解锁 -> `CoinSpendEvent`与快照 -> 门、空气墙、HUD和引导刷新；请求Rebirth继续使用独立权威资格与重置事务。
+叶子完成状态、金币与Rebirth次数 -> 玩家碰门 -> 服务端以Rebirth次数只计算门价并原子扣款/解锁 -> `CoinSpendEvent`与快照 -> 门、空气墙、HUD和引导刷新；请求Rebirth按基础四区和本轮实际解锁区域使用独立权威资格与重置事务。
 
 ## 配置
 
-区域数量、顺序和最终区域来自`RegionConfig`；Area_02～08基础门价来自`AreaUnlockConfig`。当前门价为`BaseUnlockPrice × RebirthConfig.GetLeafCountMultiplier(RebirthCount)`，即每次Rebirth增加基础价的50%；彩虹便便要求和其他倍率仍来自`RebirthConfig`。
+区域数量、顺序和最终区域来自`RegionConfig`；Area_02～08基础门价来自`AreaUnlockConfig`。当前门价为`BaseUnlockPrice × RebirthConfig.GetLeafCountMultiplier(RebirthCount)`，即每次Rebirth增加基础价的50%，但该次数绝不授予门权限。普通Rebirth的最远必清区域为`max(Area_04, 本轮最高已解锁Area)`，彩虹便便要求为`(RebirthCount + 1) × 5`；说明统一为`Clear Areas 1-N or find X/Y`。
 
 ## Remote
 
@@ -50,16 +50,20 @@
 - Area_02～08必须清完所有前置区域并成功扣除当前轮次门价；重复或失败请求不得扣款。
 - 空气墙只改当前客户端并恢复每个Part的Studio原始`CanCollide`。
 - 角色死亡不重锁空气墙；只有游戏内Rebirth改变区域进度。
+- Rebirth次数只能影响门价，不能直接解锁门、跳过金币或替代前置清理。
+- 普通Rebirth要求清完Area_01～04及本轮实际解锁的全部更远区域；清区或彩虹便便任一条件成立即可。
 - 普通与SKIP Rebirth除资格来源外使用同一重置事务。
 - Lobby共享钱币不属于任何Area，不改变区域清理、开门或Rebirth资格。
 
 ## 修改影响
 
-改变区域数量需同步RegionConfig、门、空气墙、叶子、失物、HUD、存档过滤和验收。改变Rebirth保留边界需逐项审计全部36个主存档字段。
+改变区域数量需同步RegionConfig、门、空气墙、叶子、失物、HUD、存档过滤和验收。改变Rebirth保留边界需逐项审计全部35个主存档字段。
 
 ## 最小回归清单
 
 - [ ] Area_02～08按顺序付费解锁，价格随Rebirth次数刷新，未满足条件时服务端拒绝且不扣款。
 - [ ] Door03/Door04/Door07重复入口显示同价、只收费一次；Streaming重载后价格牌与门状态恢复。
 - [ ] 两名不同进度玩家的空气墙互不影响。
+- [ ] 未解锁Area05时说明为`Clear Areas 1-4 or find 0/5`；主动解锁到Area05/06/08后分别要求清到5/6/8，Rebirth次数本身不会开门或扩大范围。
+- [ ] 清区和彩虹便便条件独立生效，客户端说明、服务端失败提示和权威资格使用相同区域及数量。
 - [ ] 死亡不重锁，普通和SKIP Rebirth后墙体及进度正确恢复。

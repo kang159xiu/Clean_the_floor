@@ -17,9 +17,8 @@ local LOST_ITEM_HOTBAR_ORDER = 1_000
 local REVEAL_TOTAL_DURATION = LostItemConfig.GetLuckyRevealTotalDuration()
 local NEARBY_REVEAL_RADIUS = LostItemConfig.RevealAnimation.NearbyViewerRadius
 local TIMED_LUCKY_BOX = LostItemConfig.TimedLuckyBox
-local PROGRESSIVE_SPAWN_MODE = LostItemConfig.SpawnModes
-	and LostItemConfig.SpawnModes.Progressive
-	or "Progressive"
+local LUCKY_BOX_LEAF_INTERVAL = math.max(1, math.floor(LostItemConfig.LuckyBoxLeafInterval))
+local LUCKY_BOX_SPAWN_CHANCE = math.clamp(LostItemConfig.LuckyBoxSpawnChance, 0, 1)
 local TIMED_REWARD_KIND_FIRST = TIMED_LUCKY_BOX.RewardKinds.First
 local TIMED_REWARD_KIND_RECURRING = TIMED_LUCKY_BOX.RewardKinds.Recurring
 
@@ -65,77 +64,6 @@ local function removeInteractiveDescendants(instance)
 	end
 end
 
-local function chooseProgressiveTriggerCounts(
-	random,
-	collectedLeafCount,
-	totalLeafCount,
-	requestedCount,
-	excludedTriggerCounts
-)
-	local firstTrigger = math.max(1, math.floor(tonumber(collectedLeafCount) or 0) + 1)
-	local lastTrigger = math.max(0, math.floor(tonumber(totalLeafCount) or 0))
-	local candidates = {}
-	for triggerLeafCount = firstTrigger, lastTrigger do
-		if not excludedTriggerCounts or excludedTriggerCounts[triggerLeafCount] ~= true then
-			table.insert(candidates, triggerLeafCount)
-		end
-	end
-	local triggerCount = math.min(
-		#candidates,
-		math.max(0, math.floor(tonumber(requestedCount) or 0))
-	)
-	if triggerCount <= 0 then
-		return {}
-	end
-
-	local triggers = {}
-	for index = 1, triggerCount do
-		local selectedIndex = random:NextInteger(index, #candidates)
-		candidates[index], candidates[selectedIndex] = candidates[selectedIndex], candidates[index]
-		table.insert(triggers, candidates[index])
-	end
-	table.sort(triggers)
-	return triggers
-end
-
-local function chooseBaseSpawnCount(random, areaId)
-	local configuredChooser = LostItemConfig.ChooseBaseSpawnCount
-	if type(configuredChooser) == "function" then
-		return configuredChooser(random, areaId)
-	end
-
-	local areaConfig = LostItemConfig.Areas and LostItemConfig.Areas[areaId]
-	assert(areaConfig, "Unknown lost item area: " .. tostring(areaId))
-	local minimum = math.max(
-		0,
-		math.floor(tonumber(areaConfig.MinimumSpawnCount) or tonumber(LostItemConfig.MinimumSpawnCount) or 3)
-	)
-	local maximum = math.max(
-		minimum,
-		math.floor(tonumber(areaConfig.MaximumSpawnCount) or tonumber(LostItemConfig.MaximumSpawnCount) or 6)
-	)
-	return random:NextInteger(minimum, maximum)
-end
-
-local function getTriggerLeafCount(triggerProgress, totalLeafCount)
-	local total = math.max(0, math.floor(tonumber(totalLeafCount) or 0))
-	if total <= 0 then
-		return math.huge
-	end
-	local progress = math.clamp(tonumber(triggerProgress) or 1, 0, 1)
-	return math.clamp(math.ceil(progress * total), 1, total)
-end
-
-local function makePersistentSpawnId(player, rebirthCount, areaId, itemIndex)
-	return string.format(
-		"Run_%d_%d_%s_%04d",
-		player.UserId,
-		math.max(0, math.floor(tonumber(rebirthCount) or 0)),
-		areaId,
-		itemIndex
-	)
-end
-
 function LostItemService:_ensurePlayerSession(player)
 	local session = playerSessions[player]
 	if session then
@@ -164,18 +92,6 @@ function LostItemService:_getInventoryStack(playerSession, lostItemId, create)
 	return stack
 end
 
-function LostItemService:_getInventorySpawnIds(playerSession)
-	local result = {}
-	for _, stack in playerSession.Inventory do
-		for _, item in stack do
-			if type(item.SpawnId) == "string" then
-				result[item.SpawnId] = true
-			end
-		end
-	end
-	return result
-end
-
 function LostItemService:_getInventorySnapshot(playerSession)
 	local counts = {}
 	local total = 0
@@ -187,118 +103,6 @@ function LostItemService:_getInventorySnapshot(playerSession)
 		end
 	end
 	return counts, total
-end
-
-function LostItemService:_getPersistentRun(player)
-	local state = self.PlayerDataService:GetState(player)
-	if not state then
-		return nil, nil
-	end
-	local rebirthCount = math.max(0, math.floor(tonumber(state.RebirthCount) or 0))
-	local runProgress = state.LostItemRunProgress
-	if
-		type(runProgress) ~= "table"
-		or math.max(0, math.floor(tonumber(runProgress.RebirthCount) or 0)) ~= rebirthCount
-		or type(runProgress.Areas) ~= "table"
-	then
-		runProgress = {
-			RebirthCount = rebirthCount,
-			Areas = {},
-		}
-		state.LostItemRunProgress = runProgress
-		self.PlayerDataService:QueuePersistentSave(player)
-	end
-	return runProgress, state
-end
-
-function LostItemService:_getPersistentItem(player, areaId, itemIndex)
-	local runProgress = self:_getPersistentRun(player)
-	local persistentArea = runProgress and runProgress.Areas[areaId]
-	if not persistentArea then
-		return nil
-	end
-	local normalizedIndex = math.floor(tonumber(itemIndex) or 0)
-	return persistentArea.Items[normalizedIndex]
-end
-
-function LostItemService:_rebuildRuntimeAreaSession(player, areaSession, persistentArea, totalLeafCount)
-	areaSession.PersistentArea = persistentArea
-	areaSession.BaseSpawnCount = persistentArea.BaseSpawnCount
-	areaSession.TotalLeafCount = math.max(0, math.floor(tonumber(totalLeafCount) or 0))
-	areaSession.SpawnCount = #persistentArea.Items
-	areaSession.PlannedItems = {}
-	areaSession.FoundItems = {}
-	areaSession.CountedSpawnIds = {}
-	areaSession.NextPlannedIndex = 1
-	areaSession.NextSpawnSerial = #persistentArea.Items + 1
-
-	local state = self.PlayerDataService:GetState(player)
-	local rebirthCount = math.max(0, math.floor(tonumber(state and state.RebirthCount) or 0))
-	local validSpawnIds = {}
-	for itemIndex, persistentItem in ipairs(persistentArea.Items) do
-		local config = LostItemConfig.Types[persistentItem.LostItemId]
-		if config and config.PoopOnly ~= true then
-			local spawnId = makePersistentSpawnId(player, rebirthCount, areaSession.AreaId, itemIndex)
-			validSpawnIds[spawnId] = persistentItem
-			table.insert(areaSession.PlannedItems, {
-				AreaId = areaSession.AreaId,
-				SpawnId = spawnId,
-				LostItemId = persistentItem.LostItemId,
-				RarityId = config.RarityId,
-				LuckyTier = config.LuckyTier,
-				Guaranteed = persistentItem.Guaranteed == true,
-				TimedRewardKind = persistentItem.TimedRewardKind,
-				TriggerProgress = persistentItem.TriggerProgress,
-				TriggerLeafCount = getTriggerLeafCount(
-					persistentItem.TriggerProgress,
-					areaSession.TotalLeafCount
-				),
-				ItemIndex = itemIndex,
-				PersistentItem = persistentItem,
-			})
-			if persistentItem.Found == true then
-				areaSession.CountedSpawnIds[spawnId] = true
-				table.insert(areaSession.FoundItems, {
-					SpawnId = spawnId,
-					LostItemId = persistentItem.LostItemId,
-				})
-			end
-		end
-	end
-	table.sort(areaSession.PlannedItems, function(left, right)
-		local leftProgress = tonumber(left.TriggerProgress) or 1
-		local rightProgress = tonumber(right.TriggerProgress) or 1
-		if leftProgress == rightProgress then
-			return left.ItemIndex < right.ItemIndex
-		end
-		return leftProgress < rightProgress
-	end)
-
-	for spawnId, itemData in areaSession.WorldItems do
-		if itemData.PersistentItem then
-			local persistentItem = validSpawnIds[spawnId]
-			if not persistentItem then
-				persistentItem = self:_getPersistentItem(
-					player,
-					itemData.PlanAreaId,
-					itemData.ItemIndex
-				)
-			end
-			if
-				not persistentItem
-				or persistentItem.Redeemed == true
-				or persistentItem.Expired == true
-				or persistentItem.Found == true
-			then
-				areaSession.WorldItems[spawnId] = nil
-			else
-				itemData.PersistentItem = persistentItem
-				itemData.Found = persistentItem.Found == true
-				itemData.Guaranteed = persistentItem.Guaranteed == true
-				itemData.TimedRewardKind = persistentItem.TimedRewardKind
-			end
-		end
-	end
 end
 
 function LostItemService:_getActiveYardKey(player)
@@ -318,98 +122,32 @@ function LostItemService:_ensureYardSession(player)
 end
 
 function LostItemService:_ensureAreaSession(player, areaId, allowCompleted)
-	local yardSession, yardKey = self:_ensureYardSession(player)
+	local yardSession = self:_ensureYardSession(player)
 	local existing = yardSession.Areas[areaId]
-	local areaCompleted = self.LeafService:IsAreaCompleted(player, areaId)
-	local areaConfig = LostItemConfig.Areas[areaId]
-	if not areaConfig then
-		return nil, false, false
-	end
-	local runProgress, state = self:_getPersistentRun(player)
-	if not state then
+	if not LostItemConfig.Areas[areaId] or not self.PlayerDataService:GetState(player) then
 		return nil, false, false
 	end
 	if not self.LeafService:IsAreaGameplayReady(player, areaId) then
 		return nil, false, false
 	end
-	local persistentArea = runProgress.Areas[areaId]
 	if existing then
-		if persistentArea then
-			local _, totalLeafCount = self.LeafService:GetLeafCounts(player, areaId)
-			self:_rebuildRuntimeAreaSession(player, existing, persistentArea, totalLeafCount)
-			local restored = self:_restorePersistentWorldItems(player, yardKey, existing)
-			return existing, false, restored
-		end
 		return existing, false, false
 	end
-	if areaCompleted and allowCompleted ~= true and not persistentArea then
-		return nil, false, false
-	end
-
-	local collectedLeafCount = 0
-	local totalLeafCount = 0
-	if persistentArea or not areaCompleted then
-		collectedLeafCount, totalLeafCount = self.LeafService:GetLeafCounts(player, areaId)
-	end
-	local createdPersistentPlan = false
-	if not persistentArea and not areaCompleted then
-		local remainingLeafCount = math.max(0, totalLeafCount - collectedLeafCount)
-		if totalLeafCount <= 0 or remainingLeafCount <= 0 then
-			return nil, false, false
-		end
-		local baseSpawnCount = chooseBaseSpawnCount(self.Random, areaId)
-		local requestedCount = math.min(baseSpawnCount, remainingLeafCount)
-		local triggerLeafCounts = chooseProgressiveTriggerCounts(
-			self.Random,
-			collectedLeafCount,
-			totalLeafCount,
-			requestedCount
-		)
-		local items = {}
-		for index, triggerLeafCount in ipairs(triggerLeafCounts) do
-			local lostItemId = LostItemConfig.ChooseLostItemId(self.Random, areaId)
-			items[index] = {
-				LostItemId = lostItemId,
-				TriggerProgress = math.clamp(triggerLeafCount / totalLeafCount, 0, 1),
-				Triggered = false,
-				Found = false,
-				Redeemed = false,
-				Expired = false,
-				Guaranteed = false,
-			}
-		end
-		persistentArea = {
-			BaseSpawnCount = baseSpawnCount,
-			Items = items,
-		}
-		runProgress.Areas[areaId] = persistentArea
-		createdPersistentPlan = true
-		self.PlayerDataService:QueuePersistentSave(player)
-	end
-
+	local collectedLeafCount, totalLeafCount = self.LeafService:GetLeafCounts(player, areaId)
 	local areaSession = {
 		AreaId = areaId,
-		SpawnMode = areaConfig.SpawnMode,
-		BaseSpawnCount = persistentArea and persistentArea.BaseSpawnCount or 0,
-		SpawnCount = persistentArea and #persistentArea.Items or 0,
+		SpawnCount = 0,
 		TotalLeafCount = totalLeafCount,
-		PlannedItems = {},
-		NextPlannedIndex = 1,
 		WorldItems = {},
 		FoundItems = {},
 		CountedSpawnIds = {},
-		NextSpawnSerial = persistentArea and #persistentArea.Items + 1 or 1,
-		PersistentArea = persistentArea,
+		NextSpawnSerial = 1,
+		ProcessedCheckpointCounts = {
+			Progression = math.floor(math.max(0, collectedLeafCount) / LUCKY_BOX_LEAF_INTERVAL),
+		},
 	}
 	yardSession.Areas[areaId] = areaSession
-	if persistentArea then
-		self:_rebuildRuntimeAreaSession(player, areaSession, persistentArea, totalLeafCount)
-	end
-	local restored = persistentArea and self:_restorePersistentWorldItems(player, yardKey, areaSession) or false
-	if self.MetricsService and createdPersistentPlan and #persistentArea.Items > 0 then
-		self.MetricsService:RecordLostItemPlan(player, areaId, #persistentArea.Items)
-	end
-	return areaSession, true, restored
+	return areaSession, true, false
 end
 
 function LostItemService:_isCandidateOccupied(areaSession, position)
@@ -527,105 +265,19 @@ function LostItemService:_chooseAreaGroundPosition(areaId)
 	return rayResult and rayResult.Position or candidate
 end
 
-function LostItemService:_removePersistentWorldProjections(playerSession, keepYardKey, keepAreaId, spawnId)
-	for yardKey, yardSession in playerSession.Yards do
-		for areaId, areaSession in yardSession.Areas do
-			if yardKey ~= keepYardKey or (keepAreaId ~= nil and areaId ~= keepAreaId) then
-				local itemData = areaSession.WorldItems[spawnId]
-				if itemData and itemData.PersistentItem then
-					areaSession.WorldItems[spawnId] = nil
-				end
-			end
-		end
-	end
-end
-
-function LostItemService:_findPersistentWorldProjection(playerSession, yardKey, spawnId)
-	local yardSession = playerSession.Yards[yardKey]
-	local foundAreaSession = nil
-	local foundItemData = nil
-	local removedDuplicate = false
-	for _, areaSession in yardSession and yardSession.Areas or {} do
-		local itemData = areaSession.WorldItems[spawnId]
-		if itemData and itemData.PersistentItem then
-			if not foundItemData then
-				foundAreaSession = areaSession
-				foundItemData = itemData
-			else
-				areaSession.WorldItems[spawnId] = nil
-				removedDuplicate = true
-			end
-		end
-	end
-	return foundAreaSession, foundItemData, removedDuplicate
-end
-
-function LostItemService:_restorePersistentWorldItems(player, yardKey, areaSession)
-	if not areaSession.PersistentArea then
-		return false
-	end
-	local playerSession = self:_ensurePlayerSession(player)
-	local inventorySpawnIds = self:_getInventorySpawnIds(playerSession)
-	local changed = false
-	for _, plannedItem in areaSession.PlannedItems do
-		local persistentItem = plannedItem.PersistentItem
-		local spawnId = plannedItem.SpawnId
-		local pendingReveal = pendingReveals[player]
-		local revealPendingForSpawn = pendingReveal
-			and pendingReveal.ItemData
-			and pendingReveal.ItemData.SpawnId == spawnId
-		if revealPendingForSpawn then
-			if areaSession.WorldItems[spawnId] then
-				areaSession.WorldItems[spawnId] = nil
-				changed = true
-			end
-		elseif
-			persistentItem.Redeemed == true
-			or persistentItem.Expired == true
-			or persistentItem.Found == true
-			or inventorySpawnIds[spawnId] == true
-		then
-			if areaSession.WorldItems[spawnId] then
-				areaSession.WorldItems[spawnId] = nil
-				changed = true
-			end
-			self:_removePersistentWorldProjections(playerSession, nil, nil, spawnId)
-		elseif persistentItem.Triggered == true then
-			self:_removePersistentWorldProjections(playerSession, yardKey, nil, spawnId)
-			local _, projectedItem, removedDuplicate = self:_findPersistentWorldProjection(
-				playerSession,
-				yardKey,
-				spawnId
-			)
-			if removedDuplicate then
-				changed = true
-			end
-			if projectedItem then
-				projectedItem.PersistentItem = persistentItem
-				projectedItem.ItemIndex = plannedItem.ItemIndex
-				projectedItem.PlanAreaId = areaSession.AreaId
-				projectedItem.Found = persistentItem.Found == true
-				projectedItem.Guaranteed = persistentItem.Guaranteed == true
-			end
-		end
-	end
-	return changed
-end
-
-function LostItemService:_applyPendingLuckyBoxGuarantee(player, plannedItem)
+function LostItemService:_applyPendingLuckyBoxGuarantee(player, itemData)
 	local state = self.PlayerDataService:GetState(player)
 	local onboarding = state and state.LuckyBoxOnboarding
-	local persistentItem = plannedItem and plannedItem.PersistentItem
 	if
 		type(onboarding) ~= "table"
 		or onboarding.HighTierGuaranteePending ~= true
 		or onboarding.HighTierGuaranteeCompleted == true
-		or type(persistentItem) ~= "table"
+		or type(itemData) ~= "table"
 	then
-		return plannedItem and plannedItem.Guaranteed == true
+		return itemData and itemData.Guaranteed == true
 	end
 
-	local luckyTier = LostItemConfig.GetLuckyTier(plannedItem.LostItemId)
+	local luckyTier = LostItemConfig.GetLuckyTier(itemData.LostItemId)
 	if not luckyTier then
 		return false
 	end
@@ -634,15 +286,13 @@ function LostItemService:_applyPendingLuckyBoxGuarantee(player, plannedItem)
 			self.Random,
 			4
 		)
-		persistentItem.LostItemId = guaranteedLostItemId
-		plannedItem.LostItemId = guaranteedLostItemId
-		plannedItem.RarityId = guaranteedRarityId
-		plannedItem.LuckyTier = 4
+		itemData.LostItemId = guaranteedLostItemId
+		itemData.RarityId = guaranteedRarityId
+		itemData.LuckyTier = 4
 	else
-		plannedItem.LuckyTier = luckyTier
+		itemData.LuckyTier = luckyTier
 	end
-	persistentItem.Guaranteed = true
-	plannedItem.Guaranteed = true
+	itemData.Guaranteed = true
 	onboarding.LowTierPickupCount = 3
 	onboarding.HighTierGuaranteePending = false
 	onboarding.HighTierGuaranteeCompleted = true
@@ -651,28 +301,23 @@ function LostItemService:_applyPendingLuckyBoxGuarantee(player, plannedItem)
 end
 
 function LostItemService:_findOutstandingTimedLuckyBox(player)
-	local runProgress, state = self:_getPersistentRun(player)
-	if not runProgress or not state then
+	local playerSession = playerSessions[player]
+	if not playerSession then
 		return nil
 	end
-
-	for _, areaId in RegionConfig.PersistentOrder do
-		local persistentArea = runProgress.Areas[areaId]
-		for itemIndex, persistentItem in ipairs(persistentArea and persistentArea.Items or {}) do
-			local timedRewardKind = persistentItem.TimedRewardKind
-			if
-				(timedRewardKind == TIMED_REWARD_KIND_FIRST
-					or timedRewardKind == TIMED_REWARD_KIND_RECURRING)
-				and persistentItem.Found ~= true
-				and persistentItem.Redeemed ~= true
-				and persistentItem.Expired ~= true
-			then
-				return {
-					AreaId = areaId,
-					ItemIndex = itemIndex,
-					PersistentItem = persistentItem,
-					RewardKind = timedRewardKind,
-				}
+	for _, yardSession in playerSession.Yards do
+		for _, areaSession in yardSession.Areas do
+			for _, itemData in areaSession.WorldItems do
+				local timedRewardKind = itemData.TimedRewardKind
+				if timedRewardKind == TIMED_REWARD_KIND_FIRST
+					or timedRewardKind == TIMED_REWARD_KIND_RECURRING
+				then
+					return {
+						AreaSession = areaSession,
+						ItemData = itemData,
+						RewardKind = timedRewardKind,
+					}
+				end
 			end
 		end
 	end
@@ -747,13 +392,6 @@ function LostItemService:_spawnTimedLuckyBox(player, rewardKind)
 		playerSession.TimedLuckyBoxNextSpawnAt = nil
 		playerSession.TimedLuckyBoxRewardKind = outstanding.RewardKind
 		playerSession.TimedLuckyBoxWaitingForPickup = true
-		if
-			outstanding.RewardKind == TIMED_REWARD_KIND_FIRST
-			and onboarding.FirstTimedHighTierBoxSpawned ~= true
-		then
-			onboarding.FirstTimedHighTierBoxSpawned = true
-			self.PlayerDataService:QueuePersistentSave(player)
-		end
 		self.PlayerDataService:PushSnapshot(player)
 		return true
 	end
@@ -768,65 +406,26 @@ function LostItemService:_spawnTimedLuckyBox(player, rewardKind)
 	if not areaSession then
 		return false
 	end
-	local runProgress = self:_getPersistentRun(player)
-	if not runProgress then
-		return false
-	end
-	local persistentArea = runProgress.Areas[areaId]
-	local createdPersistentArea = false
-	if not persistentArea then
-		persistentArea = {
-			BaseSpawnCount = chooseBaseSpawnCount(self.Random, areaId),
-			Items = {},
-		}
-		runProgress.Areas[areaId] = persistentArea
-		createdPersistentArea = true
-	end
 
 	local luckyTier = self:_chooseTimedLuckyTier()
 	local lostItemId, rarityId = LostItemConfig.ChooseLostItemIdForTier(self.Random, luckyTier)
-	local itemIndex = #persistentArea.Items + 1
-	local persistentItem = {
-		LostItemId = lostItemId,
-		TriggerProgress = 0,
-		Triggered = true,
-		Found = false,
-		Redeemed = false,
-		Expired = false,
-		Guaranteed = false,
-		TimedRewardKind = rewardKind,
-	}
-	table.insert(persistentArea.Items, persistentItem)
-
-	local _, totalLeafCount = self.LeafService:GetLeafCounts(player, areaId)
-	self:_rebuildRuntimeAreaSession(player, areaSession, persistentArea, totalLeafCount)
 	local spawnPosition = self:_chooseTimedLuckyBoxSpawnPosition(player, areaSession)
-	local spawnId = makePersistentSpawnId(player, state.RebirthCount, areaId, itemIndex)
+	local spawnId = string.format("Timed_%d_%s", player.UserId, HttpService:GenerateGUID(false))
 	local worldItem = spawnPosition
 		and self:_makeWorldItem(areaId, lostItemId, spawnId, spawnPosition, false)
 		or nil
 	if not worldItem then
-		table.remove(persistentArea.Items, itemIndex)
-		if createdPersistentArea and #persistentArea.Items == 0 then
-			runProgress.Areas[areaId] = nil
-		end
-		self:_rebuildRuntimeAreaSession(player, areaSession, persistentArea, totalLeafCount)
 		return false
 	end
 
-	worldItem.PersistentItem = persistentItem
-	worldItem.ItemIndex = itemIndex
 	worldItem.Guaranteed = false
 	worldItem.TimedRewardKind = rewardKind
 	areaSession.WorldItems[spawnId] = worldItem
-	if rewardKind == TIMED_REWARD_KIND_FIRST then
-		onboarding.FirstTimedHighTierBoxSpawned = true
-	end
+	areaSession.SpawnCount += 1
 	local playerSession = self:_ensurePlayerSession(player)
 	playerSession.TimedLuckyBoxNextSpawnAt = nil
 	playerSession.TimedLuckyBoxRewardKind = rewardKind
 	playerSession.TimedLuckyBoxWaitingForPickup = true
-	self.PlayerDataService:QueuePersistentSave(player)
 	if self.MetricsService then
 		local spawnSource = getSpawnSource(rewardKind)
 		self.MetricsService:RecordLostItemPlan(player, areaId, 1, spawnSource)
@@ -862,13 +461,6 @@ function LostItemService:_scheduleTimedLuckyBox(player, forceRestart)
 		playerSession.TimedLuckyBoxNextSpawnAt = nil
 		playerSession.TimedLuckyBoxRewardKind = outstanding.RewardKind
 		playerSession.TimedLuckyBoxWaitingForPickup = true
-		if
-			outstanding.RewardKind == TIMED_REWARD_KIND_FIRST
-			and onboarding.FirstTimedHighTierBoxSpawned ~= true
-		then
-			onboarding.FirstTimedHighTierBoxSpawned = true
-			self.PlayerDataService:QueuePersistentSave(player)
-		end
 		self.PlayerDataService:PushSnapshot(player)
 		return
 	end
@@ -920,75 +512,100 @@ function LostItemService:_scheduleTimedLuckyBox(player, forceRestart)
 	end)
 end
 
-function LostItemService:_spawnProgressiveItemsAtPosition(
+function LostItemService:_spawnCheckpointBox(
+	player,
+	areaSession,
+	collectedPosition,
+	streamKey,
+	checkpointIndex
+)
+	local lostItemId, rarityId, luckyTier = LostItemConfig.ChooseLostItemId(
+		self.Random,
+		areaSession.AreaId
+	)
+	local itemData = {
+		LostItemId = lostItemId,
+		RarityId = rarityId,
+		LuckyTier = luckyTier,
+		Guaranteed = false,
+	}
+	local guaranteed = self:_applyPendingLuckyBoxGuarantee(player, itemData)
+	areaSession.NextSpawnSerial += 1
+	local streamToken = if streamKey == "Progression"
+		then "P"
+		else "R" .. tostring(streamKey:match("%d+$") or 0)
+	local spawnId = string.format(
+		"Checkpoint_%d_%s_%s_%04d_%04d",
+		player.UserId,
+		areaSession.AreaId,
+		streamToken,
+		checkpointIndex,
+		areaSession.NextSpawnSerial
+	)
+	local character = player.Character
+	local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+	local spawnOrigin = if rootPart and rootPart:IsA("BasePart")
+		then rootPart.Position
+		else collectedPosition
+	local spawnPosition = self:_chooseProgressiveSpawnPosition(areaSession.AreaId, spawnOrigin)
+	local worldItem = self:_makeWorldItem(
+		areaSession.AreaId,
+		itemData.LostItemId,
+		spawnId,
+		spawnPosition,
+		false
+	)
+	if not worldItem then
+		return false
+	end
+	worldItem.Guaranteed = guaranteed == true
+	worldItem.CheckpointIndex = checkpointIndex
+	worldItem.CheckpointStreamKey = streamKey
+	areaSession.WorldItems[spawnId] = worldItem
+	areaSession.SpawnCount += 1
+	if self.MetricsService then
+		self.MetricsService:RecordLostItemSpawned(
+			player,
+			areaSession.AreaId,
+			itemData.LostItemId,
+			itemData.RarityId,
+			0,
+			itemData.LuckyTier,
+			guaranteed == true,
+			nil
+		)
+	end
+	return true
+end
+
+function LostItemService:_processLuckyBoxCheckpoints(
 	player,
 	areaSession,
 	collectedLeafCount,
-	collectedPosition
+	collectedPosition,
+	streamKey
 )
-	if
-		areaSession.SpawnMode ~= PROGRESSIVE_SPAWN_MODE
-		or typeof(collectedPosition) ~= "Vector3"
-		or self.LeafService:IsAreaCompleted(player, areaSession.AreaId)
-	then
+	if typeof(collectedPosition) ~= "Vector3" then
 		return false
 	end
 	local normalizedCollectedCount = math.max(0, math.floor(tonumber(collectedLeafCount) or 0))
-	local totalLeafCount = math.max(0, math.floor(tonumber(areaSession.TotalLeafCount) or 0))
-	local triggerProgress = if totalLeafCount > 0
-		then math.clamp(normalizedCollectedCount / totalLeafCount, 0, 1)
-		else 0
+	local checkpointCount = math.floor(normalizedCollectedCount / LUCKY_BOX_LEAF_INTERVAL)
+	local processedCount = math.max(
+		0,
+		math.floor(tonumber(areaSession.ProcessedCheckpointCounts[streamKey]) or 0)
+	)
 	local spawnedAny = false
-	while areaSession.NextPlannedIndex <= #areaSession.PlannedItems do
-		local plannedItem = areaSession.PlannedItems[areaSession.NextPlannedIndex]
-		local persistentItem = plannedItem.PersistentItem
-		if persistentItem and persistentItem.Triggered == true then
-			areaSession.NextPlannedIndex += 1
-			continue
-		end
-		if (tonumber(plannedItem.TriggerLeafCount) or math.huge) > normalizedCollectedCount then
-			break
-		end
-		local guaranteed = self:_applyPendingLuckyBoxGuarantee(player, plannedItem)
-		local spawnPosition = self:_chooseProgressiveSpawnPosition(
-			areaSession.AreaId,
-			collectedPosition
-		)
-		local worldItem = self:_makeWorldItem(
-			areaSession.AreaId,
-			plannedItem.LostItemId,
-			plannedItem.SpawnId,
-			spawnPosition,
-			false
-		)
-		if not worldItem then
-			break
-		end
-		worldItem.PersistentItem = persistentItem
-		worldItem.ItemIndex = plannedItem.ItemIndex
-		worldItem.Guaranteed = guaranteed == true
-		worldItem.TimedRewardKind = persistentItem and persistentItem.TimedRewardKind or nil
-		areaSession.WorldItems[plannedItem.SpawnId] = worldItem
-		if persistentItem then
-			persistentItem.Triggered = true
-		end
-		areaSession.NextPlannedIndex += 1
-		spawnedAny = true
-		if self.MetricsService then
-			self.MetricsService:RecordLostItemSpawned(
+	for checkpointIndex = processedCount + 1, checkpointCount do
+		areaSession.ProcessedCheckpointCounts[streamKey] = checkpointIndex
+		if self.Random:NextNumber() <= LUCKY_BOX_SPAWN_CHANCE then
+			spawnedAny = self:_spawnCheckpointBox(
 				player,
-				areaSession.AreaId,
-				plannedItem.LostItemId,
-				plannedItem.RarityId,
-				tonumber(plannedItem.TriggerProgress) or triggerProgress,
-				plannedItem.LuckyTier,
-				guaranteed == true,
-				getSpawnSource(worldItem.TimedRewardKind)
-			)
+				areaSession,
+				collectedPosition,
+				streamKey,
+				checkpointIndex
+			) or spawnedAny
 		end
-	end
-	if spawnedAny then
-		self.PlayerDataService:QueuePersistentSave(player)
 	end
 	return spawnedAny
 end
@@ -999,65 +616,46 @@ function LostItemService:OnTeamLeafRemoved(
 	collectedPosition,
 	collectedLeafCount,
 	_,
-	yardOwnerUserId
+	_,
+	collectionContext
 )
-	if areaId == LeafConfig.Lobby.AreaId then
+	if
+		areaId == LeafConfig.Lobby.AreaId
+		or not influencingPlayer
+		or not LostItemConfig.Areas[areaId]
+		or typeof(collectedPosition) ~= "Vector3"
+	then
 		return
 	end
-	if influencingPlayer and typeof(collectedPosition) == "Vector3" then
-		local playerSession = self:_ensurePlayerSession(influencingPlayer)
-		playerSession.LastCollectedPositions[areaId] = collectedPosition
+	local playerSession = self:_ensurePlayerSession(influencingPlayer)
+	playerSession.LastCollectedPositions[areaId] = collectedPosition
+	local areaSession, created = self:_ensureAreaSession(influencingPlayer, areaId, true)
+	if not areaSession then
+		return
 	end
-	local areaConfig = LostItemConfig.Areas[areaId]
-	if
-		areaConfig
-		and areaConfig.SpawnMode == PROGRESSIVE_SPAWN_MODE
-		and typeof(collectedPosition) == "Vector3"
-	then
-		local resolvedOwnerUserId = math.floor(tonumber(yardOwnerUserId) or 0)
-		if resolvedOwnerUserId <= 0 and influencingPlayer then
-			local influencingState = self.PlayerDataService:GetState(influencingPlayer)
-			resolvedOwnerUserId = math.floor(
-				tonumber(influencingState and influencingState.ActiveYardOwnerUserId) or influencingPlayer.UserId
-			)
-		end
-		if resolvedOwnerUserId > 0 then
-			local ownerKey = tostring(resolvedOwnerUserId)
-			for _, player in Players:GetPlayers() do
-				local state = self.PlayerDataService:GetState(player)
-				local activeOwnerUserId = state
-					and math.floor(tonumber(state.ActiveYardOwnerUserId) or player.UserId)
-				local isActiveYard = activeOwnerUserId == resolvedOwnerUserId
-				local playerSession = playerSessions[player]
-				if isActiveYard and not playerSession then
-					playerSession = self:_ensurePlayerSession(player)
-				end
-				local yardSession = playerSession and playerSession.Yards[ownerKey]
-				local areaSession = yardSession and yardSession.Areas[areaId]
-				local created = false
-				if
-					isActiveYard
-					and not areaSession
-					and self.LeafService:IsAreaGameplayReady(player, areaId)
-				then
-					areaSession, created = self:_ensureAreaSession(player, areaId)
-				end
-				local spawned = areaSession
-					and self:_spawnProgressiveItemsAtPosition(
-						player,
-						areaSession,
-						collectedLeafCount,
-						collectedPosition
-					)
-				if
-					isActiveYard
-					and (created or spawned)
-					and self.PlayerDataService:GetState(player)
-				then
-					self.PlayerDataService:PushSnapshot(player)
-				end
-			end
-		end
+	local isResetCoin = type(collectionContext) == "table"
+		and collectionContext.Kind == "ResetCoin"
+	local streamKey = if isResetCoin
+		then "Reset:" .. tostring(math.max(0, math.floor(tonumber(collectionContext.ResetRunSerial) or 0)))
+		else "Progression"
+	if areaSession.ProcessedCheckpointCounts[streamKey] == nil then
+		areaSession.ProcessedCheckpointCounts[streamKey] = if isResetCoin
+			then 0
+			else math.floor(math.max(0, collectedLeafCount - 1) / LUCKY_BOX_LEAF_INTERVAL)
+	elseif created and not isResetCoin then
+		areaSession.ProcessedCheckpointCounts.Progression = math.floor(
+			math.max(0, collectedLeafCount - 1) / LUCKY_BOX_LEAF_INTERVAL
+		)
+	end
+	local spawned = self:_processLuckyBoxCheckpoints(
+		influencingPlayer,
+		areaSession,
+		collectedLeafCount,
+		collectedPosition,
+		streamKey
+	)
+	if spawned and self.PlayerDataService:GetState(influencingPlayer) then
+		self.PlayerDataService:PushSnapshot(influencingPlayer)
 	end
 end
 
@@ -1084,20 +682,21 @@ function LostItemService:_onAreaGameplayReady(areaId)
 end
 
 function LostItemService:_getInventoryStackRedeemCoinValue(player, lostItemId, stack)
+	local playerState = self.PlayerDataService:GetState(player)
+	local leafValueMultiplier = tonumber(playerState and playerState.LeafValueMultiplier)
+		or tonumber(playerState and playerState.CoinMultiplier)
+		or 1
 	if LostItemConfig.IsPoopItemId(lostItemId) then
 		local total = 0
 		for _, itemData in stack or {} do
 			total += LostItemConfig.GetPoopRedeemCoinValue(
 				lostItemId,
-				tonumber(itemData.CreatorUserId) == player.UserId
+				tonumber(itemData.CreatorUserId) == player.UserId,
+				leafValueMultiplier
 			)
 		end
 		return total
 	end
-	local playerState = self.PlayerDataService:GetState(player)
-	local leafValueMultiplier = tonumber(playerState and playerState.LeafValueMultiplier)
-		or tonumber(playerState and playerState.CoinMultiplier)
-		or 1
 	return LostItemConfig.GetRedeemCoinValue(lostItemId, leafValueMultiplier)
 end
 
@@ -1369,11 +968,15 @@ function LostItemService:_sendRevealCompleted(player, pending, succeeded, isNew)
 end
 
 function LostItemService:_finalizePendingReveal(player, revealId)
-	local pending = pendingReveals[player]
-	if not pending or pending.RevealId ~= revealId then
+	local playerPendingReveals = pendingReveals[player]
+	local pending = playerPendingReveals and playerPendingReveals[revealId]
+	if not pending then
 		return
 	end
-	pendingReveals[player] = nil
+	playerPendingReveals[revealId] = nil
+	if next(playerPendingReveals) == nil then
+		pendingReveals[player] = nil
+	end
 	if player.Parent ~= Players then
 		return
 	end
@@ -1394,15 +997,9 @@ function LostItemService:_finalizePendingReveal(player, revealId)
 
 	local itemData = pending.ItemData
 	local areaSession = pending.AreaSession
-	local persistentItem = itemData.PersistentItem
-	local firstPickup = if persistentItem then persistentItem.Found ~= true else itemData.Found ~= true
+	local firstPickup = itemData.Found ~= true
 	if firstPickup then
 		itemData.Found = true
-		if persistentItem then
-			persistentItem.Triggered = true
-			persistentItem.Found = true
-			persistentItem.Expired = false
-		end
 	end
 
 	local isNew = false
@@ -1429,19 +1026,17 @@ function LostItemService:_finalizePendingReveal(player, revealId)
 			)
 		end
 	end
-	if persistentItem then
-		self:_removePersistentWorldProjections(
-			self:_ensurePlayerSession(player),
-			nil,
-			nil,
-			itemData.SpawnId
-		)
-		self.PlayerDataService:QueuePersistentSave(player)
-	end
 	local config = LostItemConfig.Types[itemData.LostItemId]
 	self.PlayerDataService:Notify(player, "Found " .. config.DisplayName .. ".")
 	if itemData.TimedRewardKind ~= nil then
 		local playerSession = self:_ensurePlayerSession(player)
+		if itemData.TimedRewardKind == TIMED_REWARD_KIND_FIRST then
+			local onboarding = state.LuckyBoxOnboarding
+			if type(onboarding) == "table" and onboarding.FirstTimedHighTierBoxSpawned ~= true then
+				onboarding.FirstTimedHighTierBoxSpawned = true
+				self.PlayerDataService:QueuePersistentSave(player)
+			end
+		end
 		playerSession.TimedLuckyBoxNextSpawnAt = nil
 		playerSession.TimedLuckyBoxRewardKind = nil
 		playerSession.TimedLuckyBoxWaitingForPickup = false
@@ -1453,7 +1048,12 @@ function LostItemService:_finalizePendingReveal(player, revealId)
 end
 
 function LostItemService:RequestPickup(player, spawnId)
-	if pickupLocks[player] or pendingReveals[player] then
+	if
+		type(spawnId) ~= "string"
+		or #spawnId <= 0
+		or #spawnId > LostItemConfig.MaximumSpawnIdLength
+		or pickupLocks[player]
+	then
 		return
 	end
 	pickupLocks[player] = true
@@ -1476,10 +1076,6 @@ function LostItemService:RequestPickup(player, spawnId)
 		or not rootPart
 		or not rootPart:IsA("BasePart")
 		or not backpack
-		or (itemData.PersistentItem and (
-			itemData.PersistentItem.Redeemed == true
-			or itemData.PersistentItem.Expired == true
-		))
 	then
 		pickupLocks[player] = nil
 		return
@@ -1502,23 +1098,23 @@ function LostItemService:RequestPickup(player, spawnId)
 		SourceAreaId = itemData.PlanAreaId or areaSession.AreaId,
 		LostItemId = itemData.LostItemId,
 		SpawnId = itemData.SpawnId,
-		ItemIndex = itemData.ItemIndex,
 		LuckyTier = luckyTier,
 		Guaranteed = itemData.Guaranteed == true,
 		TimedRewardKind = itemData.TimedRewardKind,
 	}
-	local persistentItem = itemData.PersistentItem
-	local isNew = (not persistentItem or persistentItem.Found ~= true)
+	local isNew = itemData.Found ~= true
 		and math.max(0, math.floor(tonumber(state.CollectedCounts[itemData.LostItemId]) or 0)) == 0
 	local revealCoinValue = LostItemConfig.GetRedeemCoinValue(
 		itemData.LostItemId,
 		math.max(0, tonumber(state.LeafValueMultiplier) or tonumber(state.CoinMultiplier) or 1)
 	)
 	areaSession.WorldItems[itemData.SpawnId] = nil
-	if persistentItem then
-		self:_removePersistentWorldProjections(playerSession, nil, nil, itemData.SpawnId)
+	local playerPendingReveals = pendingReveals[player]
+	if not playerPendingReveals then
+		playerPendingReveals = {}
+		pendingReveals[player] = playerPendingReveals
 	end
-	pendingReveals[player] = {
+	playerPendingReveals[revealId] = {
 		RevealId = revealId,
 		AreaSession = areaSession,
 		ItemData = itemData,
@@ -1558,60 +1154,6 @@ function LostItemService:_restoreInventoryTools(player, character)
 			self:_syncInventoryTool(player, lostItemId, false)
 		end
 	end
-end
-
-function LostItemService:_restorePersistentInventory(player)
-	local runProgress, state = self:_getPersistentRun(player)
-	if not runProgress or not state then
-		return false
-	end
-	local playerSession = self:_ensurePlayerSession(player)
-	local inventorySpawnIds = self:_getInventorySpawnIds(playerSession)
-	local rebirthCount = math.max(0, math.floor(tonumber(state.RebirthCount) or 0))
-	local restoredAny = false
-
-	for _, areaId in RegionConfig.PersistentOrder do
-		local persistentArea = runProgress.Areas[areaId]
-		for itemIndex, persistentItem in ipairs(persistentArea and persistentArea.Items or {}) do
-			local lostItemId = persistentItem.LostItemId
-			local config = LostItemConfig.Types[lostItemId]
-			local spawnId = makePersistentSpawnId(player, rebirthCount, areaId, itemIndex)
-			if
-				config
-				and config.PoopOnly ~= true
-				and persistentItem.Found == true
-				and persistentItem.Redeemed ~= true
-				and persistentItem.Expired ~= true
-				and inventorySpawnIds[spawnId] ~= true
-			then
-				local added = self:_addInventoryItem(player, {
-					SourceYardOwnerUserId = player.UserId,
-					SourceAreaId = areaId,
-					LostItemId = lostItemId,
-					SpawnId = spawnId,
-					ItemIndex = itemIndex,
-					LuckyTier = config.LuckyTier,
-					Guaranteed = persistentItem.Guaranteed == true,
-					TimedRewardKind = persistentItem.TimedRewardKind,
-				}, false, true)
-				if added then
-					inventorySpawnIds[spawnId] = true
-					restoredAny = true
-				end
-			end
-		end
-	end
-
-	if restoredAny then
-		local character = player.Character
-		if character then
-			task.defer(function()
-				self:_restoreInventoryTools(player, character)
-			end)
-		end
-		self.PlayerDataService:PushSnapshot(player)
-	end
-	return restoredAny
 end
 
 function LostItemService:_restoreLastCleaningTool(player)
@@ -1663,7 +1205,6 @@ function LostItemService:_redeemInventory(player, options)
 
 	local validItems = {}
 	local multiplierEligibleCoinValue = 0
-	local fixedCoinValue = 0
 	local playerState = self.PlayerDataService:GetState(player)
 	local leafValueMultiplier = math.max(
 		0,
@@ -1675,40 +1216,29 @@ function LostItemService:_redeemInventory(player, options)
 		local config = LostItemConfig.Types[lostItemId]
 		if config then
 			for _, itemData in stack do
-				local persistentItem = nil
-				local valid = true
-				if itemData.ItemIndex ~= nil then
-					persistentItem = self:_getPersistentItem(player, itemData.SourceAreaId, itemData.ItemIndex)
-					valid = persistentItem ~= nil
-						and persistentItem.Redeemed ~= true
-						and persistentItem.Expired ~= true
+				local redeemCoinValue
+				if config.PoopOnly == true then
+					redeemCoinValue = LostItemConfig.GetPoopRedeemCoinValue(
+						itemData.LostItemId,
+						tonumber(itemData.CreatorUserId) == player.UserId,
+						leafValueMultiplier
+					)
+				else
+					redeemCoinValue = LostItemConfig.GetRedeemCoinValue(
+						itemData.LostItemId,
+						leafValueMultiplier
+					)
 				end
-				if valid then
-					local redeemCoinValue
-					if config.PoopOnly == true then
-						redeemCoinValue = LostItemConfig.GetPoopRedeemCoinValue(
-							itemData.LostItemId,
-							tonumber(itemData.CreatorUserId) == player.UserId
-						)
-						fixedCoinValue += redeemCoinValue
-					else
-						redeemCoinValue = LostItemConfig.GetRedeemCoinValue(
-							itemData.LostItemId,
-							leafValueMultiplier
-						)
-						multiplierEligibleCoinValue += redeemCoinValue
-					end
-					table.insert(validItems, {
-						Data = itemData,
-						Config = config,
-						PersistentItem = persistentItem,
-						RedeemCoinValue = redeemCoinValue,
-					})
-				end
+				multiplierEligibleCoinValue += redeemCoinValue
+				table.insert(validItems, {
+					Data = itemData,
+					Config = config,
+					RedeemCoinValue = redeemCoinValue,
+				})
 			end
 		end
 	end
-	if multiplierEligibleCoinValue + fixedCoinValue <= 0 or #validItems <= 0 then
+	if multiplierEligibleCoinValue <= 0 or #validItems <= 0 then
 		if options.SilentEmpty ~= true then
 			self.PlayerDataService:Notify(player, "You have no Lost Items to redeem.")
 		end
@@ -1717,7 +1247,6 @@ function LostItemService:_redeemInventory(player, options)
 	end
 
 	local rewarded, awardedCoins = self.PlayerDataService:AwardLostItemCoins(player, multiplierEligibleCoinValue, {
-		FixedCoinAmount = fixedCoinValue,
 		SoundCount = #validItems,
 	})
 	if not rewarded then
@@ -1725,17 +1254,8 @@ function LostItemService:_redeemInventory(player, options)
 		return "Unavailable", 0
 	end
 
-	local persistentChanged = false
 	for _, item in validItems do
 		local itemData = item.Data
-		local persistentItem = item.PersistentItem
-		if persistentItem then
-			persistentItem.Triggered = true
-			persistentItem.Found = true
-			persistentItem.Redeemed = true
-			self:_removePersistentWorldProjections(playerSession, nil, nil, itemData.SpawnId)
-			persistentChanged = true
-		end
 		if self.MetricsService and item.Config.PoopOnly ~= true then
 			self.MetricsService:RecordLostItemRedeemed(
 				player,
@@ -1749,10 +1269,6 @@ function LostItemService:_redeemInventory(player, options)
 			)
 		end
 	end
-	if persistentChanged then
-		self.PlayerDataService:QueuePersistentSave(player)
-	end
-
 	for _, container in { player.Character, player:FindFirstChildOfClass("Backpack") } do
 		if container then
 			for _, child in container:GetChildren() do
@@ -1805,13 +1321,18 @@ function LostItemService:ResetYard(owner)
 	local ownerUserId = owner.UserId
 	local ownerKey = tostring(ownerUserId)
 	local changedPlayers = {}
-	for player, pending in pendingReveals do
-		if
-			player == owner
-			or tonumber(pending.InventoryItem and pending.InventoryItem.SourceYardOwnerUserId) == ownerUserId
-		then
+	for player, playerPendingReveals in pendingReveals do
+		for revealId, pending in playerPendingReveals do
+			if
+				player == owner
+				or tonumber(pending.InventoryItem and pending.InventoryItem.SourceYardOwnerUserId) == ownerUserId
+			then
+				playerPendingReveals[revealId] = nil
+				self:_sendRevealCompleted(player, pending, false, false)
+			end
+		end
+		if next(playerPendingReveals) == nil then
 			pendingReveals[player] = nil
-			self:_sendRevealCompleted(player, pending, false, false)
 		end
 	end
 	for player, playerSession in playerSessions do
@@ -2069,14 +1590,29 @@ function LostItemService:Init(playerDataService, leafService, metricsService, re
 	table.clear(pickupLocks)
 	table.clear(pendingReveals)
 	table.clear(shopLocks)
-	leafService:SetLeafCollectedHandler(function(player, areaId, position, collectedCount, collectionMode, ownerUserId)
-		self:OnTeamLeafRemoved(player, areaId, position, collectedCount, collectionMode, ownerUserId)
+	leafService:SetLeafCollectedHandler(function(
+		player,
+		areaId,
+		position,
+		collectedCount,
+		collectionMode,
+		ownerUserId,
+		collectionContext
+	)
+		self:OnTeamLeafRemoved(
+			player,
+			areaId,
+			position,
+			collectedCount,
+			collectionMode,
+			ownerUserId,
+			collectionContext
+		)
 	end)
 	leafService:AddAreaGameplayReadyHandler(function(areaId)
 		self:_onAreaGameplayReady(areaId)
 	end)
 	playerDataService:AddPlayerStateReadyHandler(function(player)
-		self:_restorePersistentInventory(player)
 		self:_scheduleTimedLuckyBox(player)
 	end)
 

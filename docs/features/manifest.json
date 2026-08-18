@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "mainDataSchemaVersion": 31,
+  "mainDataSchemaVersion": 33,
   "requiredSections": [
     "目标与边界",
     "玩家流程",
@@ -142,6 +142,7 @@
       "primarySources": [
         "src/client/Controllers/HarvestRangeController.luau",
         "src/client/Controllers/YardLeafController.luau",
+		"src/server/Services/AreaCoinResetService.luau",
         "src/server/Services/LeafService.luau",
         "src/shared/Config/LeafConfig.luau",
         "src/shared/Config/LeafVisibilityConfig.luau",
@@ -162,7 +163,7 @@
       "persistentFields": [],
       "studioContractSections": ["Workspace区域结构", "ReplicatedStorage资源", "叶子模板", "收割范围与描边"],
       "studioPaths": [
-        "game.Workspace.Area_01", "game.Workspace[\"大厅装扮\"].ground",
+		"game.Workspace.Area_01", "game.Workspace.Function.Reset.ProximityPrompt", "game.Workspace[\"大厅装扮\"].ground",
         "game.Workspace[\"大厅装扮\"].GeneratedLeaves", "game.ReplicatedStorage.Leaf",
         "game.ReplicatedStorage.miaobian"
       ],
@@ -240,7 +241,7 @@
       ],
       "persistentFields": [
         "BagLevel", "BagExpansionLevel", "CurrentBagValue", "BagCycleId", "BagSourceValues",
-        "SelectedPermanentBagVisualId", "LegacyAreaBagCapacityBonus"
+        "SelectedPermanentBagVisualId", "BagCapacityBonus"
       ],
       "studioContractSections": ["袋子模板", "StarterGui契约", "Prompt与代码职责"],
       "studioPaths": [
@@ -317,7 +318,7 @@
         "CarriedLostItem", "CollectibleInventoryCounts", "CollectibleInventoryTotal", "TimedLuckyBoxNextSpawnAt",
         "TimedLuckyBoxWaitingForPickup", "TimedLuckyBoxRewardKind", "LostItemCollectedCounts", "CodexClaimedTiers"
       ],
-      "persistentFields": ["LostItemRunProgress", "LuckyBoxOnboarding", "CollectedCounts", "CodexClaimedTiers"],
+      "persistentFields": ["LuckyBoxOnboarding", "CollectedCounts", "CodexClaimedTiers"],
       "studioContractSections": ["Workspace区域结构", "大厅与八区域通用回收对象", "失物模板", "丢失物兑换引导", "StarterGui契约"],
       "studioPaths": [
         "game.Workspace.Area_01.LostItemShop", "game.Workspace[\"大厅装扮\"].LostItemShop",

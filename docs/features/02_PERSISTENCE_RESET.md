@@ -10,7 +10,7 @@
 
 ## 服务端权威
 
-`PlayerDataService`是主状态和`CleanTheFloor_PlayerCollectibles_v1`的唯一拥有者，当前源码Schema为31。加载、迁移、快照、保存队列和状态修改都通过该服务；`AdminResetService`只调用正式清档入口。
+`PlayerDataService`是主状态和`CleanTheFloor_PlayerCollectibles_v1`的唯一拥有者，当前源码Schema为33。加载、迁移、快照、保存队列和状态修改都通过该服务；`AdminResetService`只调用正式清档入口。
 
 ## 客户端表现
 

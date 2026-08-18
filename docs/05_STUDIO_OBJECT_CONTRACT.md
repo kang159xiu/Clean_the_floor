@@ -25,6 +25,8 @@ Workspace
 │  └─ 2..8 [Folder或Model，对应Area_02..Area_08]
 │     └─ 任意层级BasePart
 ├─ Function [Folder或Model]
+│  ├─ Reset [BasePart，可重复；已清区域钱币重置入口]
+│  │  └─ ProximityPrompt [运行时显示Reset / Cleared Area Coins]
 │  ├─ Leaderboards.WinsBoard.SurfaceGui
 │  │  ├─ ScrollingFrame [ScrollingFrame]
 │  │  │  └─ RowTemplate
@@ -85,7 +87,8 @@ Workspace
 - Lobby使用600个全服共享稳定池位，从Leaf1～16等概率选择外观、基础背包价值固定为1，并按每0.1秒一个空位激活。Lobby描述随当前庭院快照一同下发，客户端模型只放入`大厅装扮.GeneratedLeaves`；拾取计入背包、出售和清理榜，但不写`YardProgress`、不解锁区域且不推进教程或幸运箱。
 - 每区运行时写入`AreaCleaned`属性。`GenerationComplete`表示当前生成批次是否结束；只有`GameplayReady=true`的完整区域可以被工具和描边处理，`PreviewOnly=true`的100片预览只负责远景显示。
 - 启动只完整生成基础450片的Area_01，并为Area_02生成100片预览。任一区域清完后，下一地区仍保持100片预览；只有角色身体碰门并通过服务端顺序、清理和金币扣款验证后才补齐正式数量，同时为再下一区域生成100片预览。更远区域不生成，当前Area_08没有后继区域；Area_09不得生成预览或正式叶子。
-- 普通失物不再以真实模型写入服务端`Area_XX.GeneratedLostItems`。个人地面箱克隆由客户端放在`Workspace.LocalLostItems`，原地揭晓克隆放在`Workspace.LocalLostItemReveals`；服务器仍保留计划、最终ID、位置、拾取、揭晓和奖励权威。Area_01～08在`GameplayReady=true`后建立3～6件新计划，并在随机清理节点于当前清扫点4 studs内直接生成对应等级箱子；Schema 30的首次180秒及后续300秒定时Lucky004/005复用同一容器和五个箱子模板，不要求新增世界对象。`GameHUD.HUDRoot.time.Value`必须是文字GUI对象，客户端只修改其`Text`并在节点缺失时安全关闭倒计时表现。旧轮已保存数量保持，地面快照只公开`LuckyTier`，不公开最终物品或价值。揭晓容器中的候选与最终模型按视觉Model包围盒中心对齐权威`RevealOriginCFrame`；12轮候选不得保留Billboard，最终0.25秒放大完成后挂接价值牌并展示2.5秒，再沿最高额外抬升1.5 studs的抛物线飞向开启者胸口。距离胸口目标超过2 studs时模型保持完整尺寸，进入2 studs后才缩小至15%；`GetDiamond`的首次获得提示只能在飞行结束且服务端确认入库后出现。
+- 普通失物不再以真实模型写入服务端`Area_XX.GeneratedLostItems`。个人地面箱克隆由客户端放在`Workspace.LocalLostItems`，原地揭晓克隆放在`Workspace.LocalLostItemReveals`；服务器仍保留最终ID、位置、拾取、RevealId和奖励权威。Area_01～08正式进度及每轮ResetCoin各自每收取200片进行一次独立5%判定，成功时在触发玩家周围4 studs内生成对应等级箱子；Lobby不参与。首次180秒及后续300秒定时Lucky004/005每次服务器会话重新计时，未打开箱、位置、检查点和未来计划不写DataStore。`GameHUD.HUDRoot.time.Value`必须是文字GUI对象，客户端只修改其`Text`并在节点缺失时安全关闭倒计时表现。地面快照只公开`LuckyTier`，不公开最终物品或价值。揭晓容器中的候选与最终模型按视觉Model包围盒中心对齐权威`RevealOriginCFrame`；12轮候选不得保留Billboard，最终0.25秒放大完成后挂接价值牌并展示0.5秒，再用0.65秒沿最高额外抬升1.5 studs的抛物线飞向开启者胸口，飞行全程保持完整尺寸。不同RevealId可并行动画和独立发奖；`GetDiamond`的首次获得提示只能在对应飞行结束且服务端确认入库后出现。
+- `Workspace.Function.Reset.ProximityPrompt`只在玩家自己的庭院执行免费钱币重置。全部已解锁区域都已清完且上一轮ResetCoin已收完时，为这些区域创建一轮独立会话钱币；门、`UnlockedAreas`、正式`YardProgress`、教程和首次通关保持不变。任一已解锁区域未清完时提示`Area N is not fully cleared. Reset unavailable.`，上一轮未收完时提示`Collect all reset coins before resetting again.`。
 - 重生不再使用`Workspace.Function`中的世界Part或`ProximityPrompt`；玩家统一通过`GameHUD.Frame.Rebirth`打开确认面板。
 - `Function.Leaderboards.WinsBoard`、`PlaytimeBoard`、`gold`和`POOP`共用排行榜对象契约。每个`SurfaceGui.ScrollingFrame.RowTemplate.Frame`必须保留直属`Amount/Rank/UserName [TextLabel]`；原始外层`RowTemplate`由客户端保持隐藏，生成行必须克隆完整`RowTemplate`并只在克隆内部Frame写内容，不能把内部Frame直接改挂到ScrollingFrame，否则比例行高会相对整个滚动区域放大。`ScrollingFrame`必须保留直属`UIListLayout`；客户端运行时设置`AutomaticCanvasSize=Y`、清零初始`CanvasSize`并启用纵向滚动，Studio继续负责模板行高、布局间距和滚动条样式。
 - 四个榜的`SurfaceGui.Self.Frame`都必须保留同名三个TextLabel，由每个客户端只在本地写自己的数据。`WinsBoard`显示最快清扫时间，`PlaytimeBoard`显示永久在线时长，两者使用`00m/1h05m`格式；`gold`显示永久清理叶子数，`POOP`显示永久成功制造便便次数，两者使用紧凑整数。无成绩显示`#--`以及`00m`或`0`，榜外显示`#20+`。场景对象受Streaming影响时客户端不得阻塞启动，载入后使用各自最后一份只读快照补画。
@@ -343,7 +346,7 @@ StarterGui.GameHUD
 │  │  └─ tixin [ImageLabel，可重生提醒，模板默认隐藏]
 │  └─ QuickSell [GuiButton，Quick Sell通行证入口]
 ├─ chongshengqueren [GuiObject，重生确认界面]
-│  ├─ explain [TextLabel，客户端写入英文清区或Rainbow Poop实时进度]
+│  ├─ explain [TextLabel，客户端写入`Clear Areas 1-N or find X/Y`]
 │  ├─ closes [GuiButton，关闭界面]
 │  ├─ Header.number [TextLabel，当前RebirthCount纯数字]
 │  ├─ Buttons

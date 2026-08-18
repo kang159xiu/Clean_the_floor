@@ -2,15 +2,15 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local RebirthConfig = require(ReplicatedStorage.Shared.Config.RebirthConfig)
-local RegionConfig = require(ReplicatedStorage.Shared.Config.RegionConfig)
 
 local RebirthService = {}
 
 local rebirthLocks = {}
 
-local function areBaseProgressionAreasCompleted(state)
+local function areRequiredAreasCompleted(state)
 	local areas = state and state.YardProgress and state.YardProgress.Areas or {}
-	for areaNumber = 1, RegionConfig.BaseProgressionAreaCount do
+	local requiredAreaCount = RebirthConfig.GetRequiredAreaCount(state and state.UnlockedAreas)
+	for areaNumber = 1, requiredAreaCount do
 		local areaId = string.format("Area_%02d", areaNumber)
 		local progress = areas[areaId]
 		if (tonumber(type(progress) == "table" and progress.ClearedRatio) or 0) < 1 then
@@ -29,13 +29,6 @@ local function formatMultiplier(value)
 	return string.format("%.1f", normalized)
 end
 
-local function isHomeAreaCompleted(state)
-	return areBaseProgressionAreasCompleted(state) and RegionConfig.AreAllUnlockedAreasCompleted(
-		state and state.UnlockedAreas,
-		state and state.YardProgress and state.YardProgress.Areas
-	)
-end
-
 function RebirthService:CanRebirth(player)
 	local state = self.PlayerDataService:GetState(player)
 	if not state then
@@ -47,14 +40,15 @@ function RebirthService:CanRebirth(player)
 		requiredCount
 	)
 	local rainbowPoopCompleted = foundCount >= requiredCount
-	local homeCompleted = isHomeAreaCompleted(state)
+	local homeCompleted = areRequiredAreasCompleted(state)
 	return rainbowPoopCompleted or homeCompleted, rainbowPoopCompleted, homeCompleted, foundCount, requiredCount
 end
 
 function RebirthService:GetRequirementMessage(player)
 	local _, _, _, foundCount, requiredCount = self:CanRebirth(player)
-	return string.format(
-		"Clear Areas 1-4 and every area you unlock, or find %d/%d Rainbow Poops.",
+	local state = self.PlayerDataService:GetState(player)
+	return RebirthConfig.GetRequirementText(
+		state and state.UnlockedAreas,
 		foundCount,
 		requiredCount
 	)

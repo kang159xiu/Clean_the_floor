@@ -8,7 +8,6 @@ local RegionConfig = {
 	AreaCount = 8,
 	PersistentAreaCount = 9,
 	DefaultUnlockedAreaCount = 1,
-	BaseProgressionAreaCount = 4,
 	FinalAreaId = "Area_08",
 	Order = table.freeze({
 		"Area_01",
@@ -153,22 +152,6 @@ function RegionConfig.IsActiveAreaId(areaId)
 	end
 	local areaNumber = tonumber(string.match(areaId, "^Area_(%d%d)$"))
 	return areaNumber ~= nil and areaNumber >= 1 and areaNumber <= RegionConfig.AreaCount
-end
-
-function RegionConfig.AreAllUnlockedAreasCompleted(unlockedAreas, areas)
-	local unlocked = type(unlockedAreas) == "table" and unlockedAreas or {}
-	local progressByArea = type(areas) == "table" and areas or {}
-	local foundUnlockedArea = false
-	for _, areaId in RegionConfig.Order do
-		if unlocked[areaId] == true then
-			foundUnlockedArea = true
-			local progress = progressByArea[areaId]
-			if (tonumber(type(progress) == "table" and progress.ClearedRatio) or 0) < 1 then
-				return false
-			end
-		end
-	end
-	return foundUnlockedArea
 end
 
 return table.freeze(RegionConfig)

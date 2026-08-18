@@ -23,14 +23,6 @@ local function formatMultiplier(value)
 	return string.format("%.1f", normalized)
 end
 
-local function makeRequirementText(foundCount, requiredCount)
-	return string.format(
-		"Clear Areas 1-4 and every area you unlock, or find %d/%d Rainbow Poops.",
-		math.max(0, math.floor(tonumber(foundCount) or 0)),
-		math.max(1, math.floor(tonumber(requiredCount) or 5))
-	)
-end
-
 function RebirthController:_setReminderVisible(visible)
 	local shouldBeVisible = visible == true
 	self.Reminder.Visible = shouldBeVisible
@@ -97,7 +89,8 @@ function RebirthController:ApplySnapshot(snapshot)
 		return
 	end
 	self.Eligible = snapshot.RebirthEligible == true
-	self.RequirementText = makeRequirementText(
+	self.RequirementText = RebirthConfig.GetRequirementText(
+		snapshot.UnlockedAreas,
 		snapshot.RainbowPoopFoundCount,
 		snapshot.RainbowPoopRequiredCount
 	)
@@ -169,7 +162,7 @@ function RebirthController:Init(remotes, hudController)
 	self.RequestRunning = false
 	self.SkipPromptRunning = false
 	self.LastRebirthCount = nil
-	self.RequirementText = makeRequirementText(0, RebirthConfig.GetRainbowPoopRequiredCount(0))
+	self.RequirementText = RebirthConfig.GetRequirementText({}, 0, RebirthConfig.GetRainbowPoopRequiredCount(0))
 	self.Player = Players.LocalPlayer
 	self.SkipProduct = ProductConfig.DeveloperProducts.SkipRebirth
 	assert(

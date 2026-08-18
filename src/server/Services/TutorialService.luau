@@ -482,7 +482,10 @@ function TutorialService:Init(playerDataService, leafService, lostItemService, r
 	playerDataService:SetTutorialStateProvider(function(player)
 		return self:GetSnapshotState(player)
 	end)
-	leafService:AddLeafCollectedHandler(function(player, areaId, position, _, collectionMode)
+	leafService:AddLeafCollectedHandler(function(player, areaId, position, _, collectionMode, _, collectionContext)
+		if type(collectionContext) == "table" and collectionContext.Kind == "ResetCoin" then
+			return
+		end
 		self:OnLeafRemoved(player, areaId, position, collectionMode)
 	end)
 	recycleService:AddRecycleCompletedHandler(function(player, areaId, _, awardedCoins)

@@ -16,8 +16,6 @@ local FINAL_GROW_DURATION = REVEAL_ANIMATION.FinalGrowDuration
 local FINAL_HOLD_DURATION = REVEAL_ANIMATION.FinalHoldDuration
 local FLY_TO_PLAYER_DURATION = REVEAL_ANIMATION.FlyToPlayerDuration
 local FLY_ARC_HEIGHT = REVEAL_ANIMATION.FlyArcHeight
-local FLY_SHRINK_DISTANCE = math.max(0.001, tonumber(REVEAL_ANIMATION.FlyShrinkDistance) or 2)
-local FLY_END_SCALE = REVEAL_ANIMATION.FlyEndScale
 local VALUE_FADE_DURATION = REVEAL_ANIMATION.ValueFadeDuration
 local MAXIMUM_DISPLAY_SIZE = REVEAL_ANIMATION.MaximumDisplaySize
 local PICKUP_RESPONSE_TIMEOUT = 1.5
@@ -85,17 +83,6 @@ function LocalLostItemController:_updatePrompt(entry)
 	entry.Prompt.Enabled = entry.Destroyed ~= true and entry.PickupPending ~= true
 end
 
-function LocalLostItemController:_showWaitMessage()
-	self.WaitAttemptCount += 1
-	if self.HUDController then
-		self.HUDController:ShowNotification(
-			string.format("Wait (x%d)", self.WaitAttemptCount),
-			1,
-			true
-		)
-	end
-end
-
 function LocalLostItemController:_destroyEntry(spawnId)
 	local entry = self.Entries[spawnId]
 	if not entry then
@@ -143,17 +130,14 @@ function LocalLostItemController:_createEntry(itemData)
 		Destroyed = false,
 	}
 	entry.Connection = prompt.Triggered:Connect(function()
-		if self.LocalRevealActive or self.OwnPickupRequestPending then
-			self:_showWaitMessage()
+		if entry.PickupPending then
 			return
 		end
 		entry.PickupPending = true
-		self.OwnPickupRequestPending = true
 		self:_updatePrompt(entry)
 		self.Remotes.RequestLostItemPickup:FireServer(entry.SpawnId)
 		task.delay(PICKUP_RESPONSE_TIMEOUT, function()
-			if self.OwnPickupRequestPending and self.Entries[entry.SpawnId] == entry then
-				self.OwnPickupRequestPending = false
+			if self.Entries[entry.SpawnId] == entry then
 				entry.PickupPending = false
 				self:_updatePrompt(entry)
 			end
@@ -319,7 +303,6 @@ function LocalLostItemController:_flyRevealToOpener(active, opener, phaseStartTi
 	local startCFrame = active.LastDisplayCFrame or active.RevealOriginCFrame
 	local currentCFrame = startCFrame
 	local targetLostAtProgress = nil
-	local shrinkProgress = 0
 	self:_fadeValueAnchor(active)
 
 	while self.ActiveReveals[active.RevealId] == active do
@@ -333,20 +316,11 @@ function LocalLostItemController:_flyRevealToOpener(active, opener, phaseStartTi
 				local arcHeight = 4 * progress * (1 - progress) * FLY_ARC_HEIGHT
 				local position = basePosition + Vector3.new(0, arcHeight, 0)
 				currentCFrame = CFrame.new(position) * startCFrame.Rotation
-				local distanceToTarget = (position - targetPosition).Magnitude
-				local distanceProgress = 1 - math.clamp(distanceToTarget / FLY_SHRINK_DISTANCE, 0, 1)
-				local easedShrinkProgress = TweenService:GetValue(
-					distanceProgress,
-					Enum.EasingStyle.Quad,
-					Enum.EasingDirection.In
-				)
-				shrinkProgress = math.max(shrinkProgress, easedShrinkProgress)
 			else
 				targetLostAtProgress = progress
 			end
 		end
-		local scale = 1 + (FLY_END_SCALE - 1) * shrinkProgress
-		self:_positionRevealAt(active, currentCFrame, scale, false)
+		self:_positionRevealAt(active, currentCFrame, 1, false)
 		if active.Visual and targetLostAtProgress ~= nil then
 			local fadeDuration = math.max(0.001, 1 - targetLostAtProgress)
 			self:_setRevealFade(active.Visual, (progress - targetLostAtProgress) / fadeDuration)
@@ -448,11 +422,6 @@ function LocalLostItemController:_finishReveal(active)
 		active.ValueAnchor = nil
 	end
 	self.ActiveReveals[active.RevealId] = nil
-	if active.IsLocalOpener then
-		self.LocalRevealActive = false
-		self.OwnPickupRequestPending = false
-		self.WaitAttemptCount = 0
-	end
 end
 
 function LocalLostItemController:_playReveal(payload)
@@ -487,6 +456,9 @@ function LocalLostItemController:_playReveal(payload)
 		ValueAnchor = nil,
 	}
 	self.ActiveReveals[revealId] = active
+	if type(payload.SpawnId) == "string" then
+		self:_destroyEntry(payload.SpawnId)
+	end
 	if isLocalOpener then
 		local noticeState = {
 			LostItemId = finalLostItemId,
@@ -499,12 +471,6 @@ function LocalLostItemController:_playReveal(payload)
 				self.PendingNewItemNotices[revealId] = nil
 			end
 		end)
-		self.LocalRevealActive = true
-		self.OwnPickupRequestPending = false
-		self.WaitAttemptCount = 0
-		if type(payload.SpawnId) == "string" then
-			self:_destroyEntry(payload.SpawnId)
-		end
 	end
 
 	task.spawn(function()
@@ -630,9 +596,6 @@ function LocalLostItemController:Init(remotes, hudController)
 	self.ActiveReveals = {}
 	self.PendingNewItemNotices = {}
 	self.CurrentLeafValueMultiplier = 1
-	self.LocalRevealActive = false
-	self.OwnPickupRequestPending = false
-	self.WaitAttemptCount = 0
 	self.LostItemFolder = ReplicatedStorage:WaitForChild("LostItem")
 	self.LuckyBoxFolder = ReplicatedStorage:WaitForChild("Lucky Block")
 	local highlightContainer = ReplicatedStorage:FindFirstChild("miaobian")

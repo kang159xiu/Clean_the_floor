@@ -34,7 +34,7 @@ HUD显示当前/最大容量；购买台本地克隆下一背包模型并刷新P
 
 ## 永久字段与重置
 
-`BagLevel`、`BagExpansionLevel`、`CurrentBagValue`、`BagCycleId`、`BagSourceValues`、`SelectedPermanentBagVisualId`、`LegacyAreaBagCapacityBonus`。Rebirth清空本轮普通等级、扩容和装载，保留历史兼容容量及永久权益；完整清档按清档策略重建。
+`BagLevel`、`BagExpansionLevel`、`CurrentBagValue`、`BagCycleId`、`BagSourceValues`、`SelectedPermanentBagVisualId`、`BagCapacityBonus`。Schema 32把旧`LegacyAreaBagCapacityBonus`无损归一为正式容量字段；Rebirth清空本轮普通等级、扩容和装载，保留该永久容量及永久权益，完整清档按清档策略重建。
 
 ## Studio契约
 

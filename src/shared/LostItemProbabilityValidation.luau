@@ -16,10 +16,7 @@ function LostItemProbabilityValidation.Run(drawsPerArea, seed)
 		local areaConfig = LostItemConfig.Areas[areaId]
 		local rarityCounts = {}
 		local typeCounts = {}
-		local spawnCounts = {}
-		for spawnCount = areaConfig.MinimumSpawnCount, areaConfig.MaximumSpawnCount do
-			spawnCounts[spawnCount] = 0
-		end
+		local checkpointSpawnCount = 0
 		for _, rarityId in LostItemConfig.RarityOrder do
 			rarityCounts[rarityId] = 0
 		end
@@ -28,9 +25,9 @@ function LostItemProbabilityValidation.Run(drawsPerArea, seed)
 			local lostItemId, rarityId = LostItemConfig.ChooseLostItemId(random, areaId)
 			rarityCounts[rarityId] += 1
 			typeCounts[lostItemId] = (typeCounts[lostItemId] or 0) + 1
-			local spawnCount = LostItemConfig.ChooseBaseSpawnCount(random, areaId)
-			assert(spawnCounts[spawnCount] ~= nil, "Unexpected spawn count: " .. tostring(spawnCount))
-			spawnCounts[spawnCount] += 1
+			if random:NextNumber() <= LostItemConfig.LuckyBoxSpawnChance then
+				checkpointSpawnCount += 1
+			end
 		end
 
 		local observed = {}
@@ -58,19 +55,17 @@ function LostItemProbabilityValidation.Run(drawsPerArea, seed)
 			)
 		end
 
-		local spawnCountOptionTotal = areaConfig.MaximumSpawnCount - areaConfig.MinimumSpawnCount + 1
-		for spawnCount, count in spawnCounts do
-			local observedProbability = count / draws * 100
-			assert(
-				math.abs(observedProbability - 100 / spawnCountOptionTotal) <= 0.75,
-				string.format("%s spawn count %d drifted to %.3f%%", areaId, spawnCount, observedProbability)
-			)
-		end
+		local checkpointSpawnPercentage = checkpointSpawnCount / draws * 100
+		assert(
+			math.abs(checkpointSpawnPercentage - LostItemConfig.LuckyBoxSpawnChance * 100) <= 0.35,
+			string.format("%s checkpoint spawn chance drifted to %.3f%%", areaId, checkpointSpawnPercentage)
+		)
 
 		report[areaId] = {
 			Draws = draws,
 			RarityPercentages = observed,
-			SpawnCounts = spawnCounts,
+			CheckpointSpawnCount = checkpointSpawnCount,
+			CheckpointSpawnPercentage = checkpointSpawnPercentage,
 			TypeCounts = typeCounts,
 		}
 	end

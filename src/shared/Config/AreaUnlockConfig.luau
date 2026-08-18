@@ -15,9 +15,9 @@ local baseUnlockPricesByTargetAreaNumber = {
 	[3] = 800,
 	[4] = 1_800,
 	[5] = 3_000,
-	[6] = 4_650,
-	[7] = 6_500,
-	[8] = 8_500,
+	[6] = 6_650,
+	[7] = 8_500,
+	[8] = 14_500,
 }
 
 for targetAreaNumber = 2, RegionConfig.AreaCount do
