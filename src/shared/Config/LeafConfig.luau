@@ -68,7 +68,7 @@ local LeafConfig = {
 		},
 		Leaf8 = {
 			BagValue = 1,
-			Image = "rbxassetid://91646333993574",
+			Image = "rbxassetid://102431443869720",
 		},
 		Leaf9 = {
 			BagValue = 1,
@@ -187,12 +187,13 @@ local LeafConfig = {
 		MaximumRollDegrees = 8,
 	},
 	Population = {
-		MaximumActiveLeaves = 2000,
-		RefillWorkBatchSize = 20,
+		MaximumActiveLeaves = 20000,
+		RefillWorkBatchSize = 100,
 		RefillBatchInterval = 0.1,
 		RefillRetryInterval = 0.05,
-		RefillPreparedPositionTarget = 200,
-		RefillPreparationAttemptsPerHeartbeat = 4,
+		RefillPreparedPositionTarget = 600,
+		RefillPreparationAttemptsPerHeartbeat = 12,
+		RefillDistributionCandidateCount = 4,
 	},
 	Motion = {
 		ServerSimulationStep = 0.05,

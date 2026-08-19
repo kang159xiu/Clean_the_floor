@@ -2,8 +2,16 @@ local AdminTestConfig = {
 	AllowedUserNames = {
 		["1000Universes"] = true,
 		["Fly01758"] = true,
+		["xiaoyouqifele"] = true,
+		["Fly01748"] = true,
+
+		["Firefly"] = true,
+		["zaku198902"] = true,
+		["glaugh90"] = true,
+		
+
 	},
-	InitialCoins = 999999999,
+	InitialCoins = 0,
 }
 
 local normalizedAllowedUserNames = {}

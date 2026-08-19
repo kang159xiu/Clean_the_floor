@@ -8,6 +8,7 @@ local DataResetPolicy = require(script.Parent.Parent.DataResetPolicy)
 local BagConfig = require(ReplicatedStorage.Shared.Config.BagConfig)
 local CoinFlipConfig = require(ReplicatedStorage.Shared.Config.CoinFlipConfig)
 local CoinFormat = require(ReplicatedStorage.Shared.CoinFormat)
+local CoopMatchConfig = require(ReplicatedStorage.Shared.Config.CoopMatchConfig)
 local DataResetConfig = require(ReplicatedStorage.Shared.Config.DataResetConfig)
 local HandUpgradeConfig = require(ReplicatedStorage.Shared.Config.HandUpgradeConfig)
 local LostItemConfig = require(ReplicatedStorage.Shared.Config.LostItemConfig)
@@ -22,7 +23,7 @@ local TutorialConfig = require(ReplicatedStorage.Shared.Config.TutorialConfig)
 local PlayerDataService = {}
 
 local DATASTORE_NAME = "CleanTheFloor_PlayerCollectibles_v1"
-local DATA_SCHEMA_VERSION = 33
+local DATA_SCHEMA_VERSION = 35
 local ONBOARDING_FUNNEL_VERSION = 1
 local ONBOARDING_FUNNEL_MAX_STEP = 10
 local CLEAR_SPEEDRUN_VERSION = 2
@@ -66,6 +67,10 @@ local rebirthStatusProvider = function(_)
 	return false, 0, RebirthConfig.GetRainbowPoopRequiredCount(0)
 end
 
+local areaCoinResetStatusProvider = function(_)
+	return false, "Your yard is not ready."
+end
+
 local tutorialStateProvider = function(_)
 	return nil
 end
@@ -92,10 +97,8 @@ end
 
 local yardContextProvider = function(player)
 	return {
+		Owner = player,
 		OwnerUserId = player.UserId,
-		OwnerName = player.DisplayName,
-		IsVisiting = false,
-		Visitors = {},
 	}
 end
 
@@ -110,18 +113,27 @@ local function makeFreshPersistentData(dataResetDateKey, dataResetNoticeDateKey)
 	)
 end
 
-local function preparePersistentDataForCurrentReset(rawData, isNewPlayer)
+local function preparePersistentDataForReset(rawData, isNewPlayer, resetEnabled, resetDateKey)
 	local preparedData, resetApplied = DataResetPolicy.PreparePersistentData(
 		rawData,
 		isNewPlayer,
 		DATA_SCHEMA_VERSION,
-		DataResetConfig.Enabled,
-		DataResetConfig.GetCutoffDateKey()
+		resetEnabled,
+		resetDateKey
 	)
 	if resetApplied and type(rawData) == "table" then
 		preparedData.ProcessedSkipRebirthReceiptIds = rawData.ProcessedSkipRebirthReceiptIds
 	end
 	return preparedData, resetApplied
+end
+
+local function preparePersistentDataForCurrentReset(rawData, isNewPlayer)
+	return preparePersistentDataForReset(
+		rawData,
+		isNewPlayer,
+		DataResetConfig.Enabled,
+		DataResetConfig.GetCutoffDateKey()
+	)
 end
 
 local function getDataKeyFromUserId(userId)
@@ -794,7 +806,23 @@ local function sanitizeOnboardingFunnel(rawFunnel, naturalNewPlayer)
 		then source.Eligible == true
 		else naturalNewPlayer == true
 	local leafGoal = math.max(1, math.floor(tonumber(TutorialConfig.LeafGoal) or 1))
-	local poopGuidanceCompleted = source ~= nil and source.PoopGuidanceCompleted == true
+	local poopRedeemGuidanceLimit = math.max(
+		1,
+		math.floor(tonumber(TutorialConfig.PoopRedeemGuidanceLimit) or 1)
+	)
+	local hasStoredPoopRedeemGuidanceCount = source ~= nil
+		and source.PoopRedeemGuidanceShownCount ~= nil
+	local poopRedeemGuidanceShownCount = if hasStoredPoopRedeemGuidanceCount
+		then math.clamp(
+			math.floor(tonumber(source.PoopRedeemGuidanceShownCount) or 0),
+			0,
+			poopRedeemGuidanceLimit
+		)
+		elseif source ~= nil and source.PoopGuidanceCompleted == true
+		then poopRedeemGuidanceLimit
+		else 0
+	local poopGuidanceCompleted = source ~= nil
+		and (source.PoopGuidanceCompleted == true or poopRedeemGuidanceShownCount >= poopRedeemGuidanceLimit)
 	local broomGuidanceCompleted = source ~= nil and source.BroomGuidanceCompleted == true
 	return {
 		Version = ONBOARDING_FUNNEL_VERSION,
@@ -828,9 +856,11 @@ local function sanitizeOnboardingFunnel(rawFunnel, naturalNewPlayer)
 		-- This post-tutorial guidance is opt-in only. Missing fields on old saves remain
 		-- false, so deploying the feature never backfills players who already own bags.
 		PoopGuidancePending = not poopGuidanceCompleted
+			and poopRedeemGuidanceShownCount < poopRedeemGuidanceLimit
 			and source ~= nil
 			and source.PoopGuidancePending == true,
 		PoopGuidanceCompleted = poopGuidanceCompleted,
+		PoopRedeemGuidanceShownCount = poopRedeemGuidanceShownCount,
 		BroomGuidanceReady = not broomGuidanceCompleted
 			and source ~= nil
 			and source.BroomGuidanceReady == true,
@@ -875,7 +905,7 @@ end
 
 local function sanitizePlayerAttributeLevels(rawLevels)
 	local levels = PlayerAttributeConfig.MakeDefaultLevels()
-	for _, attributeId in PlayerAttributeConfig.Order do
+	for _, attributeId in PlayerAttributeConfig.PersistedOrder do
 		levels[attributeId] = PlayerAttributeConfig.NormalizeLevel(
 			attributeId,
 			type(rawLevels) == "table" and rawLevels[attributeId] or nil
@@ -939,7 +969,7 @@ local function calculateEffectiveModifiers(rawPlayerAttributeLevels, rebirthCoun
 	local levels = sanitizePlayerAttributeLevels(rawPlayerAttributeLevels)
 	local personalMoveSpeedBonus = levels.MoveSpeed
 	local personalLeafValueMultiplier = 1
-		+ levels.LeafValue * PlayerAttributeConfig.Attributes.LeafValue.ValuePerLevel
+		+ levels.LeafValue * PlayerAttributeConfig.LegacyAttributes.LeafValue.ValuePerLevel
 	local rebirthLeafValueMultiplier = RebirthConfig.GetLeafValueMultiplier(rebirthCount)
 	local baseWalkSpeed = RegionConfig.GameplaySettings.BaseWalkSpeed
 	local walkSpeed = math.min(
@@ -1195,7 +1225,6 @@ local function makeDefaultState(
 		YardProgress = yardProgress,
 		BagCapacityBonus = bagCapacityBonus,
 		ActiveYardOwnerUserId = playerUserId,
-		AllowGuestPoop = data.AllowGuestPoop ~= false,
 		CommunityRewardClaimed = data.CommunityRewardClaimed == true,
 		CurrentAreaId = "Area_01",
 		EquippedTool = lastEquippedTool,
@@ -1235,6 +1264,7 @@ local function makeDefaultState(
 		PersistentDirty = migratedBagCapacityBonus
 			or retiredClearSpeedrun
 			or tonumber(data.SchemaVersion) ~= DATA_SCHEMA_VERSION
+			or data.AllowGuestPoop ~= nil
 			or type(data.PlayerAttributeLevels) ~= "table"
 			or (type(data.PlayerAttributeLevels) == "table" and data.PlayerAttributeLevels.Luck ~= nil)
 			or type(data.TutorialProgress) ~= "table"
@@ -1243,6 +1273,10 @@ local function makeDefaultState(
 				and data.TutorialProgress.SecondRecycleSucceeded == nil
 			)
 			or type(data.OnboardingFunnel) ~= "table"
+			or (
+				type(data.OnboardingFunnel) == "table"
+				and type(data.OnboardingFunnel.PoopRedeemGuidanceShownCount) ~= "number"
+			)
 			or type(data.ClearSpeedrun) ~= "table"
 			or data.LostItemRunProgress ~= nil
 			or type(data.LuckyBoxOnboarding) ~= "table"
@@ -1259,6 +1293,83 @@ local function makeDefaultState(
 		PersistentResetRequested = false,
 		PersistentResetInProgress = false,
 		PersistentResetCompleted = false,
+	}
+end
+
+local function captureCoopPersistentBaseline(state, playerUserId)
+	return {
+		BagLevel = sanitizeBagLevel(state.BagLevel),
+		BagExpansionLevel = sanitizeBagExpansionLevel(state.BagExpansionLevel),
+		CurrentBagValue = sanitizeWholeNumber(state.CurrentBagValue),
+		BagCycleId = math.max(1, sanitizeWholeNumber(state.BagCycleId)),
+		BagSourceValues = copyBagSourceValues(state.BagSourceValues, state.CurrentBagValue, playerUserId),
+		UnlockedTools = copyUnlockedTools(state.UnlockedTools),
+		UnlockedAreas = copyUnlockedAreas(state.UnlockedAreas),
+		HandUpgradeLevels = copyHandUpgradeLevels(state.HandUpgradeLevels),
+		ToolUpgradeLevels = copyToolUpgradeLevels(state.ToolUpgradeLevels),
+		PlayerAttributeLevels = copyPlayerAttributeLevels(state.PlayerAttributeLevels),
+		LastEquippedTool = state.LastEquippedTool,
+		TutorialProgress = copyTutorialProgress(state.TutorialProgress, state.HandUpgradeLevels),
+		OnboardingFunnel = copyOnboardingFunnel(state.OnboardingFunnel),
+		CoinFlipProgress = copyCoinFlipProgress(state.CoinFlipProgress),
+		PendingCoinFlip = copyPendingCoinFlip(state.PendingCoinFlip),
+		ClearSpeedrun = copyClearSpeedrunForSave(state),
+		YardProgress = copyYardProgress({
+			UnlockedAreas = state.UnlockedAreas,
+			Areas = state.YardProgress and state.YardProgress.Areas or {},
+		}),
+	}
+end
+
+local function applyCoopRuntimeOverlay(state)
+	local unlockedTools = sanitizeUnlockedTools(nil)
+	for toolId, owned in state.DeveloperProductToolOwnership or {} do
+		if owned == true then
+			unlockedTools[toolId] = true
+		end
+	end
+	for _, toolIndex in ToolConfig.Order do
+		local tool = ToolConfig.Tools[toolIndex]
+		if tool.PurchaseKind == "GamePass" and state.UnlockedTools[tool.Id] == true then
+			unlockedTools[tool.Id] = true
+		end
+	end
+	state.BagLevel = math.max(BagConfig.DefaultLevel, tonumber(state.DeveloperProductMinimumBagLevel) or BagConfig.DefaultLevel)
+	state.BagExpansionLevel = 0
+	state.CurrentBagValue = 0
+	state.BagCycleId = math.max(1, sanitizeWholeNumber(state.BagCycleId) + 1)
+	state.BagSourceValues = {}
+	state.BagFullNotified = false
+	state.UnlockedTools = unlockedTools
+	state.HandUpgradeLevels = HandUpgradeConfig.MakeDefaultLevels()
+	state.ToolUpgradeLevels = ToolUpgradeConfig.MakeDefaultLevels()
+	local legacyLeafValueLevel = PlayerAttributeConfig.NormalizeLevel(
+		"LeafValue",
+		state.PlayerAttributeLevels and state.PlayerAttributeLevels.LeafValue
+	)
+	state.PlayerAttributeLevels = PlayerAttributeConfig.MakeDefaultLevels()
+	state.PlayerAttributeLevels.LeafValue = legacyLeafValueLevel
+	local modifiers = calculateEffectiveModifiers(state.PlayerAttributeLevels, state.RebirthCount)
+	state.CoinMultiplier = modifiers.LeafValueMultiplier
+	state.LeafValueMultiplier = modifiers.LeafValueMultiplier
+	state.PersonalLeafValueMultiplier = modifiers.PersonalLeafValueMultiplier
+	state.RebirthLeafValueMultiplier = modifiers.RebirthLeafValueMultiplier
+	state.MoveSpeedBonus = modifiers.MoveSpeedBonus
+	state.WalkSpeed = modifiers.WalkSpeed
+	state.UnlockedAreas = { Area_01 = true }
+	state.YardProgress = {
+		UnlockedAreas = state.UnlockedAreas,
+		Areas = {},
+	}
+	state.CurrentAreaId = "Area_01"
+	state.EquippedTool = ToolConfig.DefaultToolId
+	state.LastEquippedTool = ToolConfig.DefaultToolId
+	state.ClearSpeedrun = {
+		Version = CLEAR_SPEEDRUN_VERSION,
+		Eligible = false,
+		RunRebirthCount = RebirthConfig.NormalizeCount(state.RebirthCount),
+		Completed = false,
+		AccumulatedSeconds = 0,
 	}
 end
 
@@ -1324,6 +1435,46 @@ function PlayerDataService:_loadPersistentData(player)
 	return nil, false, false
 end
 
+function PlayerDataService:_loadPersistentDataForTargetedReset(player, targetedResetDateKey)
+	local effectiveResetDateKey = math.max(
+		DataResetConfig.GetCutoffDateKey(),
+		targetedResetDateKey
+	)
+	local lastError = nil
+	for attempt = 1, MAX_DATASTORE_ATTEMPTS do
+		local isNewPlayer = false
+		local resetApplied = false
+		local success, result = pcall(function()
+			return persistentStore:UpdateAsync(getDataKey(player), function(rawData)
+				isNewPlayer = type(rawData) ~= "table"
+				local preparedData
+				preparedData, resetApplied = preparePersistentDataForReset(
+					rawData,
+					isNewPlayer,
+					true,
+					effectiveResetDateKey
+				)
+				return preparedData
+			end)
+		end)
+		if success and type(result) == "table" then
+			return result, true, isNewPlayer, resetApplied
+		end
+
+		lastError = result
+		if attempt < MAX_DATASTORE_ATTEMPTS then
+			task.wait(attempt)
+		end
+	end
+
+	if RunService:IsStudio() then
+		return makeFreshPersistentData(effectiveResetDateKey, effectiveResetDateKey), false, true, false
+	end
+
+	warn(string.format("Targeted data reset failed for %s: %s", player.Name, tostring(lastError)))
+	return nil, false, false, false
+end
+
 function PlayerDataService:_savePersistentData(player, state, maximumAttempts)
 	if not state.PersistentDataAvailable or state.PersistentResetRequested then
 		return true
@@ -1353,7 +1504,6 @@ function PlayerDataService:_savePersistentData(player, state, maximumAttempts)
 			player.UserId
 		),
 		SelectedPermanentBagVisualId = sanitizeSelectedPermanentBagVisualId(state.SelectedPermanentBagVisualId),
-		AllowGuestPoop = state.AllowGuestPoop ~= false,
 		CommunityRewardClaimed = state.CommunityRewardClaimed == true,
 		UnlockedTools = copyUnlockedTools(state.UnlockedTools),
 		UnlockedAreas = copyUnlockedAreas(state.UnlockedAreas),
@@ -1391,6 +1541,34 @@ function PlayerDataService:_savePersistentData(player, state, maximumAttempts)
 		CollectedCounts = copyCollectedCounts(state.CollectedCounts),
 		CodexClaimedTiers = copyCodexClaimedTiers(state.CodexClaimedTiers),
 	}
+	local coopBaseline = state.CoopPersistentBaseline
+	if type(coopBaseline) == "table" then
+		payload.BagLevel = coopBaseline.BagLevel
+		payload.BagExpansionLevel = coopBaseline.BagExpansionLevel
+		payload.CurrentBagValue = coopBaseline.CurrentBagValue
+		payload.BagCycleId = coopBaseline.BagCycleId
+		payload.BagSourceValues = copyBagSourceValues(
+			coopBaseline.BagSourceValues,
+			coopBaseline.CurrentBagValue,
+			player.UserId
+		)
+		payload.UnlockedTools = copyUnlockedTools(coopBaseline.UnlockedTools)
+		payload.UnlockedAreas = copyUnlockedAreas(coopBaseline.UnlockedAreas)
+		payload.HandUpgradeLevels = copyHandUpgradeLevels(coopBaseline.HandUpgradeLevels)
+		payload.ToolUpgradeLevels = copyToolUpgradeLevels(coopBaseline.ToolUpgradeLevels)
+		payload.PlayerAttributeLevels = copyPlayerAttributeLevels(coopBaseline.PlayerAttributeLevels)
+		payload.LastEquippedTool = coopBaseline.LastEquippedTool
+		payload.TutorialProgress = copyTutorialProgress(
+			coopBaseline.TutorialProgress,
+			coopBaseline.HandUpgradeLevels
+		)
+		payload.TutorialCompleted = payload.TutorialProgress.Step == TutorialConfig.Steps.Complete
+		payload.OnboardingFunnel = copyOnboardingFunnel(coopBaseline.OnboardingFunnel)
+		payload.CoinFlipProgress = copyCoinFlipProgress(coopBaseline.CoinFlipProgress)
+		payload.PendingCoinFlip = copyPendingCoinFlip(coopBaseline.PendingCoinFlip)
+		payload.ClearSpeedrun = table.clone(coopBaseline.ClearSpeedrun)
+		payload.YardProgress = copyYardProgress(coopBaseline.YardProgress)
+	end
 	local lastError = nil
 
 	for attempt = 1, attemptLimit do
@@ -1717,7 +1895,6 @@ function PlayerDataService:ResetForRebirth(player, skipRebirthPurchaseId)
 		DataResetDateKey = DataResetConfig.NormalizeStoredDateKey(state.DataResetDateKey),
 		DataResetNoticeDateKey = DataResetConfig.NormalizeStoredDateKey(state.DataResetNoticeDateKey),
 		RebirthCount = nextRebirthCount,
-		AllowGuestPoop = state.AllowGuestPoop ~= false,
 		CommunityRewardClaimed = state.CommunityRewardClaimed == true,
 		TutorialCompleted = true,
 		TutorialProgress = completedTutorialProgress,
@@ -1970,7 +2147,14 @@ function PlayerDataService:Init(remotes)
 		end
 		loadingPlayers[player] = true
 
-		local persistentData, persistentDataAvailable, isNewPlayer = self:_loadPersistentData(player)
+		local targetedResetDateKey = DataResetConfig.GetTargetedResetDateKey(player.Name)
+		local persistentData, persistentDataAvailable, isNewPlayer, dataResetPerformed
+		if targetedResetDateKey then
+			persistentData, persistentDataAvailable, isNewPlayer, dataResetPerformed =
+				self:_loadPersistentDataForTargetedReset(player, targetedResetDateKey)
+		else
+			persistentData, persistentDataAvailable, isNewPlayer = self:_loadPersistentData(player)
+		end
 		loadingPlayers[player] = nil
 		if not player.Parent then
 			return
@@ -1980,7 +2164,13 @@ function PlayerDataService:Init(remotes)
 			return
 		end
 
-		local preparedData, dataResetPerformed = preparePersistentDataForCurrentReset(persistentData, isNewPlayer)
+		local preparedData = persistentData
+		if not targetedResetDateKey then
+			preparedData, dataResetPerformed = preparePersistentDataForCurrentReset(
+				persistentData,
+				isNewPlayer
+			)
+		end
 		local state = makeDefaultState(
 			preparedData,
 			persistentDataAvailable,
@@ -1991,6 +2181,10 @@ function PlayerDataService:Init(remotes)
 		startClearSpeedrunSession(state, playerJoinedClocks[player] or os.clock())
 		state.DataResetNoticePending = dataResetPerformed or state.DataResetNoticePending
 		applyRuntimeEntitlements(player, state)
+		if CoopMatchConfig.IsCoop() then
+			state.CoopPersistentBaseline = captureCoopPersistentBaseline(state, player.UserId)
+			applyCoopRuntimeOverlay(state)
+		end
 		states[player] = state
 		ensureLeaderstats(player, state)
 		syncPlayerWalkSpeed(player, state)
@@ -2107,6 +2301,12 @@ end
 function PlayerDataService:SetRebirthStatusProvider(provider)
 	rebirthStatusProvider = provider or function(_)
 		return false, 0, RebirthConfig.GetRainbowPoopRequiredCount(0)
+	end
+end
+
+function PlayerDataService:SetAreaCoinResetStatusProvider(provider)
+	areaCoinResetStatusProvider = provider or function(_)
+		return false, "Your yard is not ready."
 	end
 end
 
@@ -2373,22 +2573,6 @@ function PlayerDataService:GetClearSpeedrunLeaderboardState(player)
 	}
 end
 
-function PlayerDataService:SetAllowGuestPoop(player, allowed, shouldPush)
-	local state = states[player]
-	if not state or type(allowed) ~= "boolean" then
-		return false
-	end
-	if state.AllowGuestPoop == allowed then
-		return true
-	end
-	state.AllowGuestPoop = allowed
-	self:MarkPersistentDirty(player)
-	if shouldPush ~= false then
-		self:PushSnapshot(player)
-	end
-	return true
-end
-
 function PlayerDataService:GetCoinRewardStatus(player)
 	local success, value, ready = pcall(coinRewardMultiplierProvider, player)
 	if not success then
@@ -2644,6 +2828,10 @@ function PlayerDataService:GetSnapshot(player)
 		sanitizeWholeNumber(rainbowPoopFoundCount),
 		rainbowPoopRequiredCount
 	)
+	local areaCoinResetEligible, areaCoinResetRequirementText = areaCoinResetStatusProvider(player)
+	if type(areaCoinResetRequirementText) ~= "string" or areaCoinResetRequirementText == "" then
+		areaCoinResetRequirementText = "Your yard is not ready."
+	end
 
 	return {
 		CanUseAdminReset = AdminTestConfig.IsAllowed(player.Name),
@@ -2678,7 +2866,7 @@ function PlayerDataService:GetSnapshot(player)
 		ToolBehavior = toolBehavior,
 		ToolStats = toolStats,
 		ToolPrice = equippedConfig
-			and RebirthConfig.GetScaledPrice(equippedConfig.Price, state.RebirthCount)
+			and RebirthConfig.GetScaledToolAndUpgradePrice(equippedConfig.Price, state.RebirthCount)
 			or 0,
 		ToolImage = equippedConfig and equippedConfig.Image or "",
 		ToolModelPath = equippedConfig and equippedConfig.ModelPath or "",
@@ -2702,8 +2890,11 @@ function PlayerDataService:GetSnapshot(player)
 		RebirthCount = RebirthConfig.NormalizeCount(state.RebirthCount),
 		CoinFlipPending = state.PendingCoinFlip ~= nil,
 		RebirthEligible = rebirthEligible == true,
+		RebirthRequiredCoins = RebirthConfig.GetRequiredCoins(state.RebirthCount),
 		RainbowPoopFoundCount = rainbowPoopFoundCount,
 		RainbowPoopRequiredCount = rainbowPoopRequiredCount,
+		AreaCoinResetEligible = areaCoinResetEligible == true,
+		AreaCoinResetRequirementText = areaCoinResetRequirementText,
 		LeafCountMultiplier = RebirthConfig.GetLeafCountMultiplier(state.RebirthCount),
 		AreaLostItemsFound = lostItemsFound,
 		AreaLostItemsTotal = lostItemsTotal,
@@ -2717,7 +2908,6 @@ function PlayerDataService:GetSnapshot(player)
 		TimedLuckyBoxRewardKind = timedLuckyBoxRewardKind,
 		ActiveYardPoops = activeYardPoops,
 		ActiveLobbyPoops = activeLobbyPoops,
-		AllowGuestPoop = state.AllowGuestPoop ~= false,
 		CommunityRewardClaimed = state.CommunityRewardClaimed == true,
 		LostItemCollectedCounts = copyCollectedCounts(state.CollectedCounts),
 		CodexClaimedTiers = copyCodexClaimedTiers(state.CodexClaimedTiers),
@@ -2729,11 +2919,6 @@ function PlayerDataService:GetSnapshot(player)
 		PendingFriendRewardTotal = pendingFriendRewardTotal,
 		PendingFriendRewardContributors = pendingFriendRewardContributors,
 		ActiveYardOwnerUserId = tonumber(yardContext.OwnerUserId) or player.UserId,
-		ActiveYardOwnerName = type(yardContext.OwnerName) == "string"
-			and yardContext.OwnerName
-			or player.DisplayName,
-		IsVisitingYard = yardContext.IsVisiting == true,
-		ActiveYardVisitors = type(yardContext.Visitors) == "table" and yardContext.Visitors or {},
 	}
 end
 

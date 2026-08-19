@@ -1,13 +1,68 @@
+local MarketplaceService = game:GetService("MarketplaceService")
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 
 local BagConfig = require(ReplicatedStorage.Shared.Config.BagConfig)
 local CoinFormat = require(ReplicatedStorage.Shared.CoinFormat)
+local ProductConfig = require(ReplicatedStorage.Shared.Config.ProductConfig)
 local RegionConfig = require(ReplicatedStorage.Shared.Config.RegionConfig)
 
 local BagProductDisplayController = {}
 
 local AREA_COUNT = RegionConfig.AreaCount
+local EXPANSION_ICON = "rbxassetid://114584597270599"
+
+local function setButtonState(button, costLabel, visible, enabled, text)
+	button.Visible = visible == true
+	button.Active = visible == true and enabled == true
+	button.AutoButtonColor = visible == true and enabled == true
+	button.Selectable = visible == true and enabled == true
+	costLabel.Text = text or ""
+end
+
+local function bindCardNodes(card)
+	if not card or not card:IsA("GuiObject") then
+		return nil
+	end
+	local nameLabel = card:FindFirstChild("Name")
+	local infoLabel = card:FindFirstChild("Info")
+	local imageFrame = card:FindFirstChild("Image")
+	local icon = imageFrame and imageFrame:FindFirstChild("Icon")
+	local buyButtons = card:FindFirstChild("BuyButtons")
+	local coinButton = buyButtons and buyButtons:FindFirstChild("Buy")
+	local robuxButton = buyButtons and buyButtons:FindFirstChild("Bu2")
+	local coinCost = coinButton and coinButton:FindFirstChild("Cost")
+	local robuxCost = robuxButton and robuxButton:FindFirstChild("Cost")
+	if
+		not nameLabel
+		or not nameLabel:IsA("TextLabel")
+		or not infoLabel
+		or not infoLabel:IsA("TextLabel")
+		or not icon
+		or not icon:IsA("ImageLabel")
+		or not coinButton
+		or not coinButton:IsA("GuiButton")
+		or not robuxButton
+		or not robuxButton:IsA("GuiButton")
+		or not coinCost
+		or not coinCost:IsA("TextLabel")
+		or not robuxCost
+		or not robuxCost:IsA("TextLabel")
+	then
+		return nil
+	end
+	return {
+		Card = card,
+		Name = nameLabel,
+		Info = infoLabel,
+		Icon = icon,
+		CoinButton = coinButton,
+		CoinCost = coinCost,
+		RobuxButton = robuxButton,
+		RobuxCost = robuxCost,
+	}
+end
 
 local function isConfiguredArea(instance)
 	if instance.Parent ~= Workspace then
@@ -29,6 +84,187 @@ local function hidePlaceholder(placeholder)
 	hideVisual(placeholder)
 	for _, descendant in placeholder:GetDescendants() do
 		hideVisual(descendant)
+	end
+end
+
+function BagProductDisplayController:_requestUpgradePurchase(paymentKind, targetId)
+	if self.UpgradeRequestBusy or not self.Remotes.RequestBagPurchase then
+		return
+	end
+	self.UpgradeRequestBusy = true
+	task.spawn(function()
+		local succeeded, result = pcall(function()
+			return self.Remotes.RequestBagPurchase:InvokeServer({
+				PaymentKind = paymentKind,
+				TargetId = targetId,
+			})
+		end)
+		self.UpgradeRequestBusy = false
+		if not succeeded then
+			warn("Backpack upgrade purchase request failed: " .. tostring(result))
+		end
+	end)
+end
+
+function BagProductDisplayController:_connectUpgradeCard(nodes, targetIdSource)
+	local function getTargetId()
+		if type(targetIdSource) == "function" then
+			return targetIdSource()
+		end
+		return targetIdSource
+	end
+	nodes.CoinButton.Activated:Connect(function()
+		local targetId = getTargetId()
+		if nodes.CoinButton.Active and type(targetId) == "string" then
+			self:_requestUpgradePurchase("Coins", targetId)
+		end
+	end)
+	nodes.RobuxButton.Activated:Connect(function()
+		local targetId = getTargetId()
+		if nodes.RobuxButton.Active and type(targetId) == "string" then
+			self:_requestUpgradePurchase("Robux", targetId)
+		end
+	end)
+end
+
+function BagProductDisplayController:_tryBindUpgradeCards()
+	local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
+	local gameHUD = playerGui:WaitForChild("GameHUD")
+	local panel = gameHUD:WaitForChild("UPattribute")
+	local playerPage = panel:FindFirstChild("Player")
+	if not playerPage or not playerPage:IsA("ScrollingFrame") then
+		warn("[BagProductDisplayController] GameHUD.UPattribute.Player [ScrollingFrame] is missing")
+		return
+	end
+
+	local standardCard = bindCardNodes(playerPage:FindFirstChild("Pickup0001"))
+	if standardCard then
+		standardCard.Card.Visible = true
+		self.StandardUpgradeCard = standardCard
+		self:_connectUpgradeCard(standardCard, function()
+			return self.StandardUpgradeTargetId
+		end)
+	else
+		warn("[BagProductDisplayController] Player.Pickup0001 has an invalid card structure")
+	end
+
+	for cardName, bagId in {
+		Pickup0002 = "bag09",
+		Pickup0003 = "bag010",
+	} do
+		local nodes = bindCardNodes(playerPage:FindFirstChild(cardName))
+		if nodes then
+			nodes.Card.Visible = true
+			self.PermanentUpgradeCards[bagId] = nodes
+			self:_connectUpgradeCard(nodes, bagId)
+		else
+			warn(string.format(
+				"[BagProductDisplayController] Player.%s has an invalid card structure",
+				cardName
+			))
+		end
+	end
+	self:_renderUpgradeCards()
+end
+
+function BagProductDisplayController:_loadRegionalPrice(itemId, assetId, infoType, basePrice)
+	self.RegionalRobuxPrices[itemId] = math.max(0, math.floor(tonumber(basePrice) or 0))
+	task.spawn(function()
+		local success, productInfo = pcall(function()
+			return MarketplaceService:GetProductInfo(assetId, infoType)
+		end)
+		if success and type(productInfo) == "table" and tonumber(productInfo.PriceInRobux) then
+			self.RegionalRobuxPrices[itemId] = math.max(
+				0,
+				math.floor(tonumber(productInfo.PriceInRobux) or 0)
+			)
+		else
+			warn("Regional backpack price lookup failed for " .. itemId .. "; using configured base price")
+		end
+		self:_renderUpgradeCards()
+	end)
+end
+
+function BagProductDisplayController:_renderUpgradeCards()
+	local currentLevel = math.clamp(
+		math.floor(tonumber(self.CurrentBagLevel) or BagConfig.DefaultLevel),
+		BagConfig.DefaultLevel,
+		BagConfig.MaxLevel
+	)
+	local expansionMode = BagConfig.CanPurchaseExpansion(currentLevel, self.CurrentPermanentBagId)
+	local standardCard = self.StandardUpgradeCard
+	if standardCard then
+		if expansionMode then
+			local price = BagConfig.GetNextExpansionPrice(self.CurrentBagExpansionLevel)
+			local increment = BagConfig.GetNextExpansionCapacityIncrement(self.CurrentBagExpansionLevel)
+			self.StandardUpgradeTargetId = "Expansion"
+			standardCard.Icon.Image = EXPANSION_ICON
+			setButtonState(standardCard.RobuxButton, standardCard.RobuxCost, false, false, "")
+			if price and increment then
+				standardCard.Name.Text = "Bag+" .. CoinFormat.Compact(increment)
+				standardCard.Info.Text = string.format(
+					"%s->%s",
+					CoinFormat.Compact(self.CurrentBagCapacity),
+					CoinFormat.Compact(self.CurrentBagCapacity + increment)
+				)
+				setButtonState(
+					standardCard.CoinButton,
+					standardCard.CoinCost,
+					true,
+					true,
+					"$" .. CoinFormat.Compact(price)
+				)
+			else
+				standardCard.Name.Text = "Bag Expansion"
+				standardCard.Info.Text = "MAX"
+				setButtonState(standardCard.CoinButton, standardCard.CoinCost, true, false, "MAX")
+			end
+		else
+			local nextLevel = currentLevel + 1
+			local config = BagConfig.Levels[nextLevel]
+			self.StandardUpgradeTargetId = config and config.ModelName or nil
+			if config then
+				standardCard.Name.Text = config.Name
+				standardCard.Info.Text = CoinFormat.Compact(config.Capacity)
+				standardCard.Icon.Image = config.Image
+				setButtonState(
+					standardCard.CoinButton,
+					standardCard.CoinCost,
+					true,
+					true,
+					"$" .. CoinFormat.Compact(config.Price)
+				)
+				local product = ProductConfig.DeveloperProductsByBagLevel[nextLevel]
+				local robuxPrice = product and self.RegionalRobuxPrices[config.ModelName] or nil
+				setButtonState(
+					standardCard.RobuxButton,
+					standardCard.RobuxCost,
+					product ~= nil,
+					product ~= nil,
+					if robuxPrice then "R" .. tostring(robuxPrice) else "R--"
+				)
+			end
+		end
+	end
+
+	for _, bagId in { "bag09", "bag010" } do
+		local config = BagConfig.PermanentBags[bagId]
+		local nodes = self.PermanentUpgradeCards[bagId]
+		if nodes then
+			nodes.Name.Text = config.Name
+			nodes.Info.Text = CoinFormat.Compact(config.Capacity)
+			nodes.Icon.Image = config.Image
+			setButtonState(nodes.CoinButton, nodes.CoinCost, false, false, "")
+			local owned = self.PermanentBagOwnership[bagId] == true
+			local price = self.RegionalRobuxPrices[bagId]
+			setButtonState(
+				nodes.RobuxButton,
+				nodes.RobuxCost,
+				true,
+				true,
+				if owned then "Equip" else if price then "R" .. tostring(price) else "R--"
+			)
+		end
 	end
 end
 
@@ -151,13 +387,20 @@ function BagProductDisplayController:ApplyBagState(
 	bagExpansionLevel,
 	capacityBonus,
 	permanentBagId,
-	bagCapacity
+	bagCapacity,
+	permanentBagOwnership
 )
 	self.CurrentBagLevel = bagLevel
 	self.CurrentBagExpansionLevel = BagConfig.NormalizeExpansionLevel(bagExpansionLevel)
 	self.CurrentCapacityBonus = math.max(0, math.floor(tonumber(capacityBonus) or 0))
 	self.CurrentPermanentBagId = type(permanentBagId) == "string" and permanentBagId or nil
 	self.CurrentBagCapacity = math.max(0, math.floor(tonumber(bagCapacity) or 0))
+	self.PermanentBagOwnership = {}
+	for _, bagId in BagConfig.PermanentOrder do
+		self.PermanentBagOwnership[bagId] = type(permanentBagOwnership) == "table"
+			and permanentBagOwnership[bagId] == true
+			or false
+	end
 	for productPart, station in self.Stations do
 		if productPart:IsDescendantOf(Workspace) then
 			self:_renderStation(
@@ -175,6 +418,7 @@ function BagProductDisplayController:ApplyBagState(
 			self.Stations[productPart] = nil
 		end
 	end
+	self:_renderUpgradeCards()
 end
 
 function BagProductDisplayController:_tryBindStation(area)
@@ -265,9 +509,16 @@ function BagProductDisplayController:_bindArea(area)
 end
 
 function BagProductDisplayController:Init(remotes)
+	self.Remotes = remotes
 	self.TemplateFolder = ReplicatedStorage:WaitForChild("bag")
 	self.Stations = {}
 	self.BoundAreas = {}
+	self.StandardUpgradeCard = nil
+	self.StandardUpgradeTargetId = nil
+	self.PermanentUpgradeCards = {}
+	self.UpgradeRequestBusy = false
+	self.RegionalRobuxPrices = {}
+	self.PermanentBagOwnership = {}
 	self.CurrentBagLevel = BagConfig.DefaultLevel
 	self.CurrentBagExpansionLevel = 0
 	self.CurrentCapacityBonus = 0
@@ -292,6 +543,31 @@ function BagProductDisplayController:Init(remotes)
 	Workspace.ChildAdded:Connect(function(child)
 		self:_bindArea(child)
 	end)
+	self:_tryBindUpgradeCards()
+
+	for level = BagConfig.DefaultLevel + 2, BagConfig.MaxLevel do
+		local bag = BagConfig.Levels[level]
+		local product = ProductConfig.DeveloperProductsByBagLevel[level]
+		if bag and product then
+			self:_loadRegionalPrice(
+				bag.ModelName,
+				product.ProductId,
+				Enum.InfoType.Product,
+				product.BaseRobuxPrice
+			)
+		end
+	end
+	for _, bagId in { "bag09", "bag010" } do
+		local config = BagConfig.PermanentBags[bagId]
+		if BagConfig.IsCapacityPermanentBag(bagId) then
+			self:_loadRegionalPrice(
+				bagId,
+				config.GamePassId,
+				Enum.InfoType.GamePass,
+				config.BaseRobuxPrice
+			)
+		end
+	end
 
 	remotes.StateSnapshotStore:Connect(function(snapshot)
 		self:ApplyBagState(
@@ -299,7 +575,8 @@ function BagProductDisplayController:Init(remotes)
 			snapshot.BagExpansionLevel,
 			snapshot.BagCapacityBonus,
 			snapshot.ActivePermanentBagId,
-			snapshot.BagCapacity
+			snapshot.BagCapacity,
+			snapshot.PermanentBagOwnership
 		)
 	end)
 	self:ApplyBagState(
@@ -307,7 +584,8 @@ function BagProductDisplayController:Init(remotes)
 		self.CurrentBagExpansionLevel,
 		self.CurrentCapacityBonus,
 		self.CurrentPermanentBagId,
-		self.CurrentBagCapacity
+		self.CurrentBagCapacity,
+		self.PermanentBagOwnership
 	)
 end
 

@@ -30,7 +30,7 @@ end
 
 function ToolProductDisplayController:_renderStation(station)
 	local tool = ToolConfig.ById[station.ToolId]
-	local price = RebirthConfig.GetScaledPrice(tool.Price, self.RebirthCount)
+	local price = RebirthConfig.GetScaledToolAndUpgradePrice(tool.Price, self.RebirthCount)
 	local priceText = "$" .. CoinFormat.Compact(price)
 	local priceLabel = findNested(station.Part, PRICE_LABEL_PATHS[station.ProductId])
 	local isOwned = self.UnlockedTools[station.ToolId] == true

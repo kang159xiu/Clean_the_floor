@@ -4,10 +4,10 @@
 
 ## 当前规模
 
-- 99个Luau文件，约37,000行。
-- 42个Remote在服务端创建、客户端读取，目前集合一致。
-- 主`StateSnapshot`有79个顶层字段，25个客户端Controller直接订阅。
-- 主存档保存payload有35个顶层字段，源码Schema为33。
+- 100个Luau文件，约35,000行。
+- 45个Remote在服务端创建、客户端读取，目前集合一致。
+- 主`StateSnapshot`有81个顶层字段，26个客户端Controller直接订阅。
+- 主存档保存payload以当前manifest为准，源码Schema为35；旧`AllowGuestPoop`已退休并在迁移保存时清除，便便兑换引导次数在`OnboardingFunnel`内迁移。
 - 仓库没有Luau单元测试、静态检查或测试框架；当前自动门槛只有文档契约检查和Rojo构建。
 
 ## 依赖图
@@ -15,11 +15,11 @@
 ```mermaid
 flowchart LR
     Studio["Studio对象与输入"] --> Client["客户端Controller"]
-    Client --> Remotes["41个Remote"]
+    Client --> Remotes["45个Remote"]
     Remotes --> Services["服务端Service"]
     Services --> PlayerData["PlayerDataService"]
     Services --> World["叶子/失物/便便世界状态"]
-    PlayerData --> Snapshot["79字段StateSnapshot"]
+    PlayerData --> Snapshot["81字段StateSnapshot"]
     Snapshot --> Store["StateSnapshotStore"]
     Store --> Client
     PlayerData --> DataStore["主DataStore"]
@@ -55,13 +55,13 @@ flowchart LR
 ### 2. 集中Remote声明
 
 - 建立共享只读Remote目录，服务端据此创建，客户端据此读取并验证类型。
-- 保持现有41个名称、类型和方向完全不变。
+- 保持现有45个名称、类型和方向完全不变。
 - 启动脚本仍负责实例创建和依赖装配，不把业务处理器放进目录模块。
 
 ### 3. 拆PlayerDataService
 
 - 先提取纯`PersistentSchema`：新档、sanitize、迁移和serialize。
-- 再提取纯`SnapshotBuilder`：显式输入服务提供者结果并返回现有79字段。
+- 再提取纯`SnapshotBuilder`：显式输入服务提供者结果并返回现有81字段。
 - 最后提取`SaveQueue`：revision、防抖、重试和退出等待。
 - `PlayerDataService`保留现有公共方法作为Facade，所有调用方先不改接口。
 

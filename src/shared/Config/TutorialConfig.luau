@@ -8,6 +8,7 @@ local steps = table.freeze({
 })
 
 local messages = table.freeze({
+	GoToCoins = "Go to the coins",
 	RecycleLeaves = "Recycle Leaves",
 	UpgradeAmount = "Upgrade Pickup Amount",
 	UpgradeSpeed = "Upgrade Pickup Speed",
@@ -22,6 +23,9 @@ local TutorialConfig = {
 	Steps = steps,
 	Messages = messages,
 	LeafGoal = 15,
+	CleanAreaId = "Area_01",
+	CleanApproachDistance = 6,
+	PoopRedeemGuidanceLimit = 2,
 	UpgradeAreaId = "Area_01",
 	AmountAttributeId = "Amount",
 	SpeedAttributeId = "Speed",

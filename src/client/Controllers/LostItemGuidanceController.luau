@@ -4,6 +4,7 @@ local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
 local LeafConfig = require(ReplicatedStorage.Shared.Config.LeafConfig)
+local LostItemConfig = require(ReplicatedStorage.Shared.Config.LostItemConfig)
 local RegionConfig = require(ReplicatedStorage.Shared.Config.RegionConfig)
 
 local LostItemGuidanceController = {}
@@ -54,6 +55,14 @@ local function chooseNearestTarget(rootPart, targets)
 		end
 	end
 	return nearestTarget
+end
+
+local function isPoopOnlyItem(item)
+	if type(item) ~= "table" or type(item.LostItemId) ~= "string" then
+		return false
+	end
+	local config = LostItemConfig.Types[item.LostItemId]
+	return config ~= nil and config.PoopOnly == true
 end
 
 function LostItemGuidanceController:Init(remotes, areaDoorController, poopController)
@@ -150,6 +159,9 @@ function LostItemGuidanceController:_shouldShowGuidance()
 		return self.CarriedLostItem ~= nil
 	end
 	if not self.CarriedLostItem then
+		return false
+	end
+	if isPoopOnlyItem(self.CarriedLostItem) then
 		return false
 	end
 	if self.CarriedLostItem.SourceAreaId == LeafConfig.Lobby.AreaId then

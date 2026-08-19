@@ -10,6 +10,22 @@ local LeafVisibilityConfig = {
 	PoolPrewarmInterval = 0.05,
 	StreamingMinRadius = 64,
 	StreamingTargetRadius = 160,
+	Performance = {
+		InitialTier = "Low",
+		WarmupSeconds = 3,
+		FocusResumeWarmupSeconds = 2,
+		SampleWindowSeconds = 5,
+		UpgradeWindowCount = 2,
+		HighAverageFps = 52,
+		HighP95FrameSeconds = 1 / 40,
+		MediumAverageFps = 32,
+		MediumP95FrameSeconds = 1 / 20,
+		LeafModelLimits = {
+			Low = 3000,
+			Medium = 10000,
+			High = 20000,
+		},
+	},
 }
 
 return table.freeze(LeafVisibilityConfig)

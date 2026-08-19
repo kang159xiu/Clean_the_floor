@@ -13,13 +13,22 @@ local UPGRADE_PULSE_SCALE = 1.12
 local UPGRADE_PULSE_DURATION = 0.35
 local AREA_COUNT = RegionConfig.AreaCount
 local PRODUCT_TARGET_REFRESH_INTERVAL = 0.25
+local CLEAN_TARGET_REFRESH_INTERVAL = 0.1
 
-function TutorialController:Init(remotes, hudController, toolController, areaDoorController, handUpgradeController)
+function TutorialController:Init(
+	remotes,
+	hudController,
+	toolController,
+	areaDoorController,
+	handUpgradeController,
+	yardLeafController
+)
 	self.Player = Players.LocalPlayer
 	self.HUDController = hudController
 	self.ToolController = toolController
 	self.AreaDoorController = areaDoorController
 	self.HandUpgradeController = handUpgradeController
+	self.YardLeafController = yardLeafController
 	self.BeamTemplate = ReplicatedStorage:WaitForChild("yindaoxian")
 	assert(self.BeamTemplate:IsA("Beam"), "ReplicatedStorage.yindaoxian must be a Beam")
 
@@ -80,6 +89,11 @@ function TutorialController:Init(remotes, hudController, toolController, areaDoo
 		self.UnlockedAreas[string.format("Area_%02d", areaNumber)] = true
 	end
 	self.ProductTargetRefreshElapsed = 0
+	self.CleanTargetRefreshElapsed = 0
+	self.CleanApproachCompleted = false
+	self.CleanTargetAnchor = nil
+	self.SessionResetCharacterPending = nil
+	self.SessionResetSerial = 0
 	self.CleanLeafCount = 0
 	self.CleanLeafGoal = math.max(1, math.floor(tonumber(TutorialConfig.LeafGoal) or 3))
 	self.PoopGuidanceStage = nil
@@ -93,7 +107,20 @@ function TutorialController:Init(remotes, hudController, toolController, areaDoo
 	remotes.StateSnapshotStore:Connect(function(snapshot)
 		self:ApplySnapshot(snapshot.TutorialState, snapshot.UnlockedAreas)
 	end)
+	hudController:ConnectSessionResetSucceeded(function(characterBeforeReset)
+		self:_resetCleanApproachForSession(characterBeforeReset)
+	end)
 	RunService.Heartbeat:Connect(function(deltaTime)
+		if self:_isCleanApproachActive() then
+			self.CleanTargetRefreshElapsed += deltaTime
+			if self.CleanTargetRefreshElapsed >= CLEAN_TARGET_REFRESH_INTERVAL then
+				self.CleanTargetRefreshElapsed %= CLEAN_TARGET_REFRESH_INTERVAL
+				self:_updateCleanApproach()
+				self:_refreshBeam()
+			end
+		else
+			self.CleanTargetRefreshElapsed = 0
+		end
 		if
 			(self.TargetKind ~= "BagUpgrade" and self.TargetKind ~= "BroomPurchase")
 			or not self.TargetReady
@@ -142,9 +169,49 @@ function TutorialController:Init(remotes, hudController, toolController, areaDoo
 	end
 end
 
+function TutorialController:_resetCleanApproachForSession(characterBeforeReset)
+	self.SessionResetSerial += 1
+	local resetSerial = self.SessionResetSerial
+	self.CleanApproachCompleted = false
+	self.CleanTargetRefreshElapsed = 0
+	self.SessionResetCharacterPending = if characterBeforeReset
+		and self.Player.Character == characterBeforeReset
+		then characterBeforeReset
+		else nil
+	self:_destroyCleanTargetAnchor()
+	self:_destroyBeam()
+	self:_refreshTutorialNotification()
+	self:_refreshYin()
+	if self.SessionResetCharacterPending then
+		task.delay(5, function()
+			if
+				self.SessionResetSerial ~= resetSerial
+				or self.SessionResetCharacterPending ~= characterBeforeReset
+			then
+				return
+			end
+			self.SessionResetCharacterPending = nil
+			self.CleanApproachCompleted = false
+			self.CleanTargetRefreshElapsed = 0
+			self:_refreshTutorialNotification()
+			self:_refreshYin()
+			self:_updateCleanApproach()
+			self:_refreshBeam()
+		end)
+		return
+	end
+	self:_updateCleanApproach()
+	self:_refreshBeam()
+end
+
 function TutorialController:_bindCharacter(character)
 	self:_destroyBeam()
 	self:_stopUpgradePulse()
+	if self.SessionResetCharacterPending and character ~= self.SessionResetCharacterPending then
+		self.SessionResetCharacterPending = nil
+		self.CleanApproachCompleted = false
+		self.CleanTargetRefreshElapsed = 0
+	end
 	if self.HumanoidDiedConnection then
 		self.HumanoidDiedConnection:Disconnect()
 		self.HumanoidDiedConnection = nil
@@ -157,8 +224,78 @@ function TutorialController:_bindCharacter(character)
 		end)
 	end
 	character:WaitForChild("HumanoidRootPart", 5)
+	self:_updateCleanApproach()
 	self:_refreshBeam()
 	self:_refreshUpgradePulse()
+end
+
+function TutorialController:_isCleanApproachActive()
+	return self.CurrentStep == TutorialConfig.Steps.CleanLeaves
+		and self.CleanLeafCount <= 0
+		and not self.CleanApproachCompleted
+		and self.SessionResetCharacterPending == nil
+end
+
+function TutorialController:_destroyCleanTargetAnchor()
+	local anchor = self.CleanTargetAnchor
+	if not anchor then
+		return
+	end
+	if self.ActiveTargetPart == anchor then
+		self:_destroyBeam()
+	end
+	anchor:Destroy()
+	self.CleanTargetAnchor = nil
+end
+
+function TutorialController:_getCleanTargetAnchor()
+	local anchor = self.CleanTargetAnchor
+	if anchor and anchor.Parent then
+		return anchor
+	end
+	anchor = Instance.new("Part")
+	anchor.Name = "LocalTutorialCoinTarget"
+	anchor.Anchored = true
+	anchor.CanCollide = false
+	anchor.CanQuery = false
+	anchor.CanTouch = false
+	anchor.CastShadow = false
+	anchor.Transparency = 1
+	anchor.Size = Vector3.new(0.2, 0.2, 0.2)
+	anchor.Parent = self.EffectsFolder
+	self.CleanTargetAnchor = anchor
+	return anchor
+end
+
+function TutorialController:_updateCleanApproach()
+	if not self:_isCleanApproachActive() then
+		self:_destroyCleanTargetAnchor()
+		return
+	end
+	local rootPart = self:_getRootPart()
+	local targetPosition = rootPart
+		and self.YardLeafController
+		and self.YardLeafController:GetNearestGuidancePosition(
+			TutorialConfig.CleanAreaId,
+			rootPart.Position
+		)
+		or nil
+	if not rootPart or not targetPosition then
+		self:_destroyCleanTargetAnchor()
+		return
+	end
+	local offsetX = targetPosition.X - rootPart.Position.X
+	local offsetZ = targetPosition.Z - rootPart.Position.Z
+	local distance = math.sqrt(offsetX * offsetX + offsetZ * offsetZ)
+	if distance <= TutorialConfig.CleanApproachDistance then
+		self.CleanApproachCompleted = true
+		self:_destroyCleanTargetAnchor()
+		self:_refreshTutorialNotification()
+		self:_refreshYin()
+		return
+	end
+	local anchor = self:_getCleanTargetAnchor()
+	anchor.Position = targetPosition
 end
 
 function TutorialController:_getRootPart()
@@ -172,7 +309,9 @@ function TutorialController:_getRootPart()
 end
 
 function TutorialController:_getTargetPart(rootPart)
-	if self.TargetKind == "Recycle" and type(self.TargetAreaId) == "string" then
+	if self:_isCleanApproachActive() then
+		return self.CleanTargetAnchor
+	elseif self.TargetKind == "Recycle" and type(self.TargetAreaId) == "string" then
 		local area = Workspace:FindFirstChild(self.TargetAreaId)
 		local recycle = area and area:FindFirstChild("Recycle_01")
 		if recycle and recycle:IsA("BasePart") then
@@ -329,7 +468,7 @@ end
 
 function TutorialController:_refreshYin()
 	if self.CurrentStep == TutorialConfig.Steps.CleanLeaves then
-		if self.CleanLeafCount >= self.CleanLeafGoal then
+		if not self.CleanApproachCompleted or self.CleanLeafCount >= self.CleanLeafGoal then
 			self.Yin.Visible = false
 			return
 		end
@@ -340,6 +479,35 @@ function TutorialController:_refreshYin()
 	end
 
 	self.Yin.Visible = false
+end
+
+function TutorialController:_refreshTutorialNotification()
+	local step = self.CurrentStep
+	if step == TutorialConfig.Steps.CleanLeaves then
+		if not self.CleanApproachCompleted and self.CleanLeafCount <= 0 then
+			self.HUDController:SetPersistentNotification(TutorialConfig.Messages.GoToCoins)
+		else
+			self.HUDController:SetPersistentNotification(
+				string.format("Hold to Clean %d/%d", self.CleanLeafCount, self.CleanLeafGoal)
+			)
+		end
+	elseif step == TutorialConfig.Steps.RecycleLeaves then
+		self.HUDController:SetPersistentNotification(TutorialConfig.Messages.RecycleLeaves)
+	elseif step == TutorialConfig.Steps.UpgradeAmount then
+		self.HUDController:SetPersistentNotification(TutorialConfig.Messages.UpgradeAmount)
+	elseif step == TutorialConfig.Steps.UpgradeSpeed then
+		if self.TargetReady then
+			self.HUDController:SetPersistentNotification(TutorialConfig.Messages.UpgradeSpeed)
+		else
+			self.HUDController:SetPersistentNotification(nil)
+		end
+	elseif self.TargetKind == "BagUpgrade" and self.TargetReady then
+		self.HUDController:SetPersistentNotification(TutorialConfig.Messages.UpgradeBag)
+	elseif self.TargetKind == "BroomPurchase" and self.TargetReady then
+		self.HUDController:SetPersistentNotification(TutorialConfig.Messages.BuyBroom)
+	else
+		self.HUDController:SetPersistentNotification(nil)
+	end
 end
 
 function TutorialController:_stopUpgradePulse()
@@ -406,6 +574,8 @@ function TutorialController:ApplySnapshot(tutorialState, unlockedAreas)
 		self.TargetReady = false
 		self.CleanLeafCount = 0
 		self.CleanLeafGoal = math.max(1, math.floor(tonumber(TutorialConfig.LeafGoal) or 3))
+		self.CleanApproachCompleted = false
+		self:_destroyCleanTargetAnchor()
 		self.HUDController:SetPersistentNotification(nil)
 		self.HUDController:SetPoopGuidanceNotification(nil)
 		self.ToolController:SetPoopGuidanceActive(false)
@@ -416,6 +586,7 @@ function TutorialController:ApplySnapshot(tutorialState, unlockedAreas)
 	end
 
 	local step = math.floor(tonumber(tutorialState.Step) or TutorialConfig.Steps.Complete)
+	local previousStep = self.CurrentStep
 	self.CurrentStep = step
 	self.TargetKind = tutorialState.TargetKind
 	self.TargetAreaId = tutorialState.TargetAreaId
@@ -433,33 +604,23 @@ function TutorialController:ApplySnapshot(tutorialState, unlockedAreas)
 	local count = math.clamp(math.floor(tonumber(tutorialState.LeafCount) or 0), 0, goal)
 	self.CleanLeafGoal = goal
 	self.CleanLeafCount = count
+	if step == TutorialConfig.Steps.CleanLeaves then
+		if count > 0 then
+			self.CleanApproachCompleted = true
+		elseif previousStep ~= TutorialConfig.Steps.CleanLeaves then
+			self.CleanApproachCompleted = false
+		end
+	else
+		self.CleanApproachCompleted = false
+		self:_destroyCleanTargetAnchor()
+	end
 	local poopGuidanceStage = tutorialState.PoopGuidanceStage
 	if poopGuidanceStage ~= "Make" and poopGuidanceStage ~= "Pickup" and poopGuidanceStage ~= "Sell" then
 		poopGuidanceStage = nil
 	end
 	self.PoopGuidanceStage = poopGuidanceStage
 	self.PoopGuidanceActive = tutorialState.PoopGuidanceActive == true
-	if step == TutorialConfig.Steps.CleanLeaves then
-		self.HUDController:SetPersistentNotification(
-			string.format("Hold to Clean %d/%d", count, goal)
-		)
-	elseif step == TutorialConfig.Steps.RecycleLeaves then
-		self.HUDController:SetPersistentNotification(TutorialConfig.Messages.RecycleLeaves)
-	elseif step == TutorialConfig.Steps.UpgradeAmount then
-		self.HUDController:SetPersistentNotification(TutorialConfig.Messages.UpgradeAmount)
-	elseif step == TutorialConfig.Steps.UpgradeSpeed then
-		if self.TargetReady then
-			self.HUDController:SetPersistentNotification(TutorialConfig.Messages.UpgradeSpeed)
-		else
-			self.HUDController:SetPersistentNotification(nil)
-		end
-	elseif self.TargetKind == "BagUpgrade" and self.TargetReady then
-		self.HUDController:SetPersistentNotification(TutorialConfig.Messages.UpgradeBag)
-	elseif self.TargetKind == "BroomPurchase" and self.TargetReady then
-		self.HUDController:SetPersistentNotification(TutorialConfig.Messages.BuyBroom)
-	else
-		self.HUDController:SetPersistentNotification(nil)
-	end
+	self:_refreshTutorialNotification()
 
 	local poopMessage = nil
 	if self.PoopGuidanceActive then
@@ -476,6 +637,7 @@ function TutorialController:ApplySnapshot(tutorialState, unlockedAreas)
 		self.PoopGuidanceActive and self.PoopGuidanceStage == "Make"
 	)
 
+	self:_updateCleanApproach()
 	self:_refreshBeam()
 	self:_refreshYin()
 	self:_refreshUpgradePulse()

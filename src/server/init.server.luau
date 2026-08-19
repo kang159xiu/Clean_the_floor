@@ -57,6 +57,11 @@ end)
 local LostItemConfig = runBootstrapStep("Module:LostItemConfig", function()
 	return require(ReplicatedStorage.Shared.Config.LostItemConfig)
 end)
+local CoopMatchConfig = runBootstrapStep("Module:CoopMatchConfig", function()
+	return require(ReplicatedStorage.Shared.Config.CoopMatchConfig)
+end)
+local IS_COOP = CoopMatchConfig.IsCoop()
+local IS_LOBBY = CoopMatchConfig.IsLobby()
 
 local servicesFolder = runBootstrapStep("ServicesFolder", function()
 	return script:WaitForChild("Services")
@@ -100,11 +105,18 @@ local PermanentBagService = loadServiceModule("PermanentBagService")
 local ToolGamePassService = loadServiceModule("ToolGamePassService")
 local AreaDoorService = loadServiceModule("AreaDoorService")
 local YardService = loadServiceModule("YardService")
-local YardInviteService = loadServiceModule("YardInviteService")
 local PoopService = loadServiceModule("PoopService")
 local LobbyCowService = loadServiceModule("LobbyCowService")
 local CommunityService = loadServiceModule("CommunityService")
 local CoinFlipService = loadServiceModule("CoinFlipService")
+local PartyMatchmakingService = loadServiceModule("PartyMatchmakingService")
+local CoopMatchService = loadServiceModule("CoopMatchService")
+
+if IS_COOP then
+	runBootstrapStep("CoopAdmission", function()
+		CoopMatchService.PrepareAdmission()
+	end)
+end
 
 local function getOrCreate(parent, className, name)
 	local existing = parent:FindFirstChild(name)
@@ -138,18 +150,17 @@ local remotes = runBootstrapStep("Remotes:CreateOrValidate", function()
 		UpgradePlayerAttribute = getOrCreate(remotesFolder, "RemoteFunction", "UpgradePlayerAttribute"),
 		ClaimCodexReward = getOrCreate(remotesFolder, "RemoteFunction", "ClaimCodexReward"),
 		ClaimCommunityReward = getOrCreate(remotesFolder, "RemoteFunction", "ClaimCommunityReward"),
-		SendYardInvite = getOrCreate(remotesFolder, "RemoteFunction", "SendYardInvite"),
-		RespondYardInvite = getOrCreate(remotesFolder, "RemoteFunction", "RespondYardInvite"),
-		LeaveVisitedYard = getOrCreate(remotesFolder, "RemoteFunction", "LeaveVisitedYard"),
-		EnterYard = getOrCreate(remotesFolder, "RemoteFunction", "EnterYard"),
-		SetPoopPermission = getOrCreate(remotesFolder, "RemoteFunction", "SetPoopPermission"),
 		ClaimFriendRewards = getOrCreate(remotesFolder, "RemoteFunction", "ClaimFriendRewards"),
 		ResetPlayerData = getOrCreate(remotesFolder, "RemoteFunction", "ResetPlayerData"),
 		RequestRebirth = getOrCreate(remotesFolder, "RemoteFunction", "RequestRebirth"),
+		RequestAreaCoinReset = getOrCreate(remotesFolder, "RemoteFunction", "RequestAreaCoinReset"),
+		RequestBagPurchase = getOrCreate(remotesFolder, "RemoteFunction", "RequestBagPurchase"),
 		RequestQuickSell = getOrCreate(remotesFolder, "RemoteFunction", "RequestQuickSell"),
 		RequestReturnToSpawn = getOrCreate(remotesFolder, "RemoteFunction", "RequestReturnToSpawn"),
 		RequestProgressSave = getOrCreate(remotesFolder, "RemoteFunction", "RequestProgressSave"),
 		RequestCoinFlip = getOrCreate(remotesFolder, "RemoteFunction", "RequestCoinFlip"),
+		RequestPartyAction = getOrCreate(remotesFolder, "RemoteFunction", "RequestPartyAction"),
+		RequestCoopReturn = getOrCreate(remotesFolder, "RemoteFunction", "RequestCoopReturn"),
 		StateSnapshot = getOrCreate(remotesFolder, "RemoteEvent", "StateSnapshot"),
 		LeafCollected = getOrCreate(remotesFolder, "RemoteEvent", "LeafCollected"),
 		LeafPickupBatch = getOrCreate(remotesFolder, "RemoteEvent", "LeafPickupBatch"),
@@ -166,8 +177,13 @@ local remotes = runBootstrapStep("Remotes:CreateOrValidate", function()
 		UpdateHarvestAim = getOrCreate(remotesFolder, "RemoteEvent", "UpdateHarvestAim"),
 		RequestAreaUnlock = getOrCreate(remotesFolder, "RemoteEvent", "RequestAreaUnlock"),
 		AreaCompletionNotice = getOrCreate(remotesFolder, "RemoteEvent", "AreaCompletionNotice"),
+		AreaCoinResetPrompted = getOrCreate(remotesFolder, "RemoteEvent", "AreaCoinResetPrompted"),
+		AreaDoorCoinShortageNotice = getOrCreate(
+			remotesFolder,
+			"RemoteEvent",
+			"AreaDoorCoinShortageNotice"
+		),
 		Notification = getOrCreate(remotesFolder, "RemoteEvent", "Notification"),
-		YardInviteReceived = getOrCreate(remotesFolder, "RemoteEvent", "YardInviteReceived"),
 		YardLeafSnapshot = getOrCreate(remotesFolder, "RemoteEvent", "YardLeafSnapshot"),
 		YardLeafDelta = getOrCreate(remotesFolder, "RemoteEvent", "YardLeafDelta"),
 		ClearTimeLeaderboardSnapshot = getOrCreate(
@@ -190,6 +206,8 @@ local remotes = runBootstrapStep("Remotes:CreateOrValidate", function()
 			"RemoteEvent",
 			"PoopLeaderboardSnapshot"
 		),
+		PartySnapshot = getOrCreate(remotesFolder, "RemoteEvent", "PartySnapshot"),
+		CoopMatchSnapshot = getOrCreate(remotesFolder, "RemoteEvent", "CoopMatchSnapshot"),
 	}
 end)
 
@@ -199,9 +217,6 @@ end
 
 initializeService("YardService", function()
 	YardService:Init(PlayerDataService)
-end)
-initializeService("YardInviteService", function()
-	YardInviteService:Init(PlayerDataService, YardService, remotes)
 end)
 initializeService("PlaytestMetricsService", function()
 	PlaytestMetricsService:Init(PlayerDataService)
@@ -243,13 +258,24 @@ initializeService("LeafService", function()
 		remotes
 	)
 end)
-initializeService("ClearTimeLeaderboardService", function()
-	ClearTimeLeaderboardService:Init(
-		PlayerDataService,
-		LeafService,
-		remotes.ClearTimeLeaderboardSnapshot
-	)
+remotes.UpdateHarvestAim.OnServerEvent:Connect(function(player, valid, aimOffset, playerCentered)
+	if type(valid) ~= "boolean" then
+		return
+	end
+	if valid and type(playerCentered) ~= "boolean" then
+		return
+	end
+	LeafService:UpdateHarvestAim(player, valid, aimOffset, playerCentered)
 end)
+if not IS_COOP then
+	initializeService("ClearTimeLeaderboardService", function()
+		ClearTimeLeaderboardService:Init(
+			PlayerDataService,
+			LeafService,
+			remotes.ClearTimeLeaderboardSnapshot
+		)
+	end)
+end
 initializeService("PlaytimeLeaderboardService", function()
 	PlaytimeLeaderboardService:Init(remotes.PlaytimeLeaderboardSnapshot)
 end)
@@ -295,9 +321,11 @@ initializeService("ReturnToSpawnService", function()
 		remotes.RequestReturnToSpawn
 	)
 end)
-initializeService("TutorialService", function()
-	TutorialService:Init(PlayerDataService, LeafService, LostItemService, RecycleService, PoopService)
-end)
+if not IS_COOP then
+	initializeService("TutorialService", function()
+		TutorialService:Init(PlayerDataService, LeafService, LostItemService, RecycleService, PoopService)
+	end)
+end
 initializeService("ProductService", function()
 	ProductService:Init(
 		PlayerDataService,
@@ -306,15 +334,17 @@ initializeService("ProductService", function()
 		PlaytestMetricsService,
 		DeveloperProductService
 	)
-	ProductService:AddBagUpgradePurchasedHandler(function(player, _, _, purchaseKind)
-		TutorialService:OnBagUpgradePurchased(player, purchaseKind)
-	end)
-	ProductService:AddToolPurchasedHandler(function(player, toolId)
-		TutorialService:OnToolAcquired(player, toolId)
-	end)
-	DeveloperProductService:AddToolGrantedHandler(function(player, toolId)
-		TutorialService:OnToolAcquired(player, toolId)
-	end)
+	if not IS_COOP then
+		ProductService:AddBagUpgradePurchasedHandler(function(player, _, _, purchaseKind)
+			TutorialService:OnBagUpgradePurchased(player, purchaseKind)
+		end)
+		ProductService:AddToolPurchasedHandler(function(player, toolId)
+			TutorialService:OnToolAcquired(player, toolId)
+		end)
+		DeveloperProductService:AddToolGrantedHandler(function(player, toolId)
+			TutorialService:OnToolAcquired(player, toolId)
+		end)
+	end
 end)
 initializeService("DoubleCoinsService", function()
 	DoubleCoinsService:Init(PlayerDataService)
@@ -334,16 +364,19 @@ end)
 initializeService("ToolGamePassService", function()
 	ToolGamePassService:Init(PlayerDataService, GamePassStationCollisionService)
 end)
-initializeService("AreaDoorService", function()
-	AreaDoorService:Init(
-		PlayerDataService,
-		remotes.RequestAreaUnlock,
-		LeafService,
-		PlaytestMetricsService,
-		EconomyService,
-		remotes.CoinSpendEvent
-	)
-end)
+if not IS_COOP then
+	initializeService("AreaDoorService", function()
+		AreaDoorService:Init(
+			PlayerDataService,
+			remotes.RequestAreaUnlock,
+			LeafService,
+			PlaytestMetricsService,
+			EconomyService,
+			remotes.CoinSpendEvent,
+			remotes.AreaDoorCoinShortageNotice
+		)
+	end)
+end
 initializeService("PlayerAreaService", function()
 	PlayerAreaService:Init(PlayerDataService, PlaytestMetricsService)
 end)
@@ -359,26 +392,52 @@ initializeService("PlayerDataService.Providers", function()
 	PlayerDataService:SetTimedLuckyBoxSnapshotProvider(function(player)
 		return LostItemService:GetTimedLuckyBoxSnapshot(player)
 	end)
+	if not IS_COOP then
+		PlayerDataService:SetAreaCoinResetStatusProvider(function(player)
+			local status = LeafService:GetAreaCoinResetStatus(player)
+			return status.Eligible, status.RequirementText
+		end)
+	end
 end)
+if IS_COOP then
+	initializeService("CoopMatchService", function()
+		CoopMatchService:Init(
+			PlayerDataService,
+			LeafService,
+			RecycleService,
+			CleaningToolActionService,
+			PoopService,
+			remotes
+		)
+	end)
+end
 initializeService("PlayerDataService", function()
 	PlayerDataService:Init(remotes)
 end)
-initializeService("AreaCoinResetService", function()
-	AreaCoinResetService:Init(PlayerDataService, LeafService, CleaningToolActionService)
-end)
-initializeService("CoinFlipService", function()
-	CoinFlipService:Init(PlayerDataService, remotes.RequestCoinFlip)
-end)
-initializeService("LobbyCowService", function()
-	LobbyCowService:Init(PoopService)
-end)
+if not IS_COOP then
+	initializeService("AreaCoinResetService", function()
+		AreaCoinResetService:Init(
+			PlayerDataService,
+			LeafService,
+			CleaningToolActionService,
+			remotes.AreaCoinResetPrompted,
+			remotes.RequestAreaCoinReset
+		)
+	end)
+	initializeService("CoinFlipService", function()
+		CoinFlipService:Init(PlayerDataService, remotes.RequestCoinFlip)
+	end)
+	initializeService("LobbyCowService", function()
+		LobbyCowService:Init(PoopService)
+	end)
+end
 initializeService("CommunityService", function()
 	CommunityService:Init(PlayerDataService, remotes.ClaimCommunityReward)
 end)
+if not IS_COOP then
 initializeService("RebirthService", function()
 	RebirthService:Init(
 		PlayerDataService,
-		YardService,
 		LeafService,
 		LostItemService,
 		TutorialService,
@@ -393,7 +452,6 @@ end)
 initializeService("AdminResetService", function()
 	AdminResetService:Init(
 		PlayerDataService,
-		YardService,
 		LeafService,
 		LostItemService,
 		TutorialService,
@@ -403,13 +461,33 @@ initializeService("AdminResetService", function()
 		remotes.ResetPlayerData
 	)
 end)
+end
+
+if IS_LOBBY then
+	initializeService("PartyMatchmakingService", function()
+		PartyMatchmakingService:Init(PlayerDataService, remotes)
+	end)
+end
 
 remotes.RequestRebirth.OnServerInvoke = function(player)
+	if IS_COOP then
+		return false, "Rebirth is unavailable in a co-op match.", PlayerDataService:GetSnapshot(player)
+	end
 	return RebirthService:TryRebirth(player, false)
 end
 
 remotes.RequestQuickSell.OnServerInvoke = function(player)
 	return QuickSellService:Request(player)
+end
+
+remotes.RequestBagPurchase.OnServerInvoke = function(player, request)
+	if type(request) == "table"
+		and request.PaymentKind == "Robux"
+		and (request.TargetId == "bag09" or request.TargetId == "bag010")
+	then
+		return PermanentBagService:RequestBagPurchase(player, request.TargetId)
+	end
+	return ProductService:RequestBagPurchase(player, request)
 end
 
 local progressSaveRequestTimes = {}
@@ -524,16 +602,6 @@ remotes.SetLeafPickupActive.OnServerEvent:Connect(function(player, active)
 		return
 	end
 	LeafService:SetPickupActive(player, active)
-end)
-
-remotes.UpdateHarvestAim.OnServerEvent:Connect(function(player, valid, aimOffset, playerCentered)
-	if type(valid) ~= "boolean" then
-		return
-	end
-	if valid and type(playerCentered) ~= "boolean" then
-		return
-	end
-	LeafService:UpdateHarvestAim(player, valid, aimOffset, playerCentered)
 end)
 
 remotes.RequestLostItemPickup.OnServerEvent:Connect(function(player, spawnId)

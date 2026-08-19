@@ -365,3 +365,141 @@ B-002五级升级价格：双手范围`100/200/450/750/1500`、速度`63/188/375
 - MCP装备Tool01并在大厅实际收取后，背包从`23/500`增加到`24/500`；用户同时现场确认大厅钱币已显示且可收集。
 - Output未发现LeafService、YardLeafController、快照、增量或重复实例错误。全服多客户端同步仍需发布服或多人Studio会话复验。
 - `scripts\verify-project.cmd`通过，功能文档、manifest和Rojo构建均通过。
+
+## 2026-08-18 普通区域补充提速与防堆叠专项
+
+- 普通区域与ResetCoin补充从20片/0.1秒提高到100片/0.1秒；长期活动上限仍为2000。后台位置缓存目标为600，每Heartbeat最多准备12个位置，每个位置从全区域按表面积取4个候选并选择“活动叶子+缓存位置”最少的8-stud网格。
+- 已删除依附随机现存叶子及“目标网格必须仍有叶子”的限制。Area_05隔离分布测试在预置100片高密度网格后生成200个补充候选，成功200个、覆盖2/2个地面Part和86个网格，单网格最多4个，高密度测试网格新增0个。
+- 1000片隔离缺口测试以600个预热位置启动并按每Heartbeat 12个持续准备：前500片约0.463秒补回，1000片约1.049秒全部补回，活动数量准确恢复到2000且Pending归零。
+- 正确Place `95556867008792`经Rojo同步后冷启动通过：Server Bootstrap完成，Client Bootstrap为`succeeded=29 failed=0 skipped=0`；新会话服务端无Warning/Error，客户端仅保留与本功能无关的既有`Workspace.Function.3Kback`区域价格牌缺失警告。
+- Studio服务端120帧采样为Heartbeat平均16.65ms、P95 18.07ms、最大19.98ms。`scripts\verify-project.cmd`通过，Schema 33、42个Remotes、79个快照字段和35个持久字段均未改变。
+
+## 2026-08-18 幸运箱即时200片判定专项
+
+- `LostItemService`已删除`ProcessedCheckpointCounts`、会话基线和历史档位循环；现在只在本次权威收取后的累计数大于0且能被200整除时调用一次5%判定，失败或重进后不补抽。
+- 正确Place `95556867008792`通过Studio MCP运行态隔离检查：199/201/399/4401均未调用随机，200/400各调用一次并生成对应第1/2档；200强制失败后201未重试，4400→4401重进等价路径的随机调用与生成均为0，4399→4400等价路径只生成第22档一次。
+- ResetCoin使用`Reset:7`隔离轮次时仅200生成第1档、201不生成；Lobby入口提前返回。每区100,000次概率验证通过，Area_01/Area_08检查点成功率分别为5.044%/4.901%。
+- Rojo同步源码确认不存在旧函数或旧状态；Server/Client Bootstrap完成且失物服务无错误。控制台仅保留无关的永久背包价格牌缺失和用户名HTTP 429警告；真实DataStore账号在4399/4400边界跨服重进仍留待发布环境复验。
+
+## 2026-08-18 四人合作匹配与副本
+
+- 源码/文档：新增双Place模式配置、四组队台、合作入场/结算、Coop共享叶子作用域、共享便便池和主档基线保护；`scripts\verify-project.cmd`通过（16功能域、105 Luau、49 Remote、Schema 33）。
+- Studio Edit：大厅及副本Place的`place001`～`place004.GuiPart.BillboardGui.Frame.TextLabel`均经MCP统一为`0/4`；大厅已由Rojo接收全部新增模块，Remote类型与人数牌静态检查通过。
+- 待连接/发布验收：副本Studio当前未连接Rojo，尚未接收新增源码；Windows窗口控制接口返回`0x80004002`，未用Studio手写生产脚本绕过。连接同一`default.project.json`后仍需完成副本Play和发布跨Place传送，并在Creator Dashboard关闭副本直接访问。
+
+## 2026-08-18 新手钱币引导、背包分页与组队台修正
+
+- 源码接入新手第1步Area_01最近钱币目标及6-stud单向切换；升级面板支持可选第5个Bag页，并新增服务端权威`RequestBagPurchase`处理逐级金币升级、扩容、Developer Product与3K/5K Game Pass入口。
+- Studio Edit核验Money Place当前尚无`GameHUD.UPattribute.Bag`和`UPattributeicon.5`，因此源码保持可选缺失并记录为需保存模板后复验；未在Studio创建或手写生产对象。
+- `place001.底座`存在同名`Group [Model]`与装饰MeshPart的场景已改为按名称和类型精确选Model；Money Place短Play中`PartyMatchmakingService`正常初始化，旧`WaitForChild("Group [Model]")`异常未再出现。
+- 本轮Money Place客户端Bootstrap为`succeeded=31 failed=0 skipped=0`，新`RequestBagPurchase`两端加载成功。`scripts\verify-project.cmd`通过（16功能域、105 Luau、50 Remote、Schema 33）；背包页视觉、按钮状态和真实Marketplace购买仍待Studio模板保存后验收。
+
+## 2026-08-18 钱币原位置世界提示专项
+
+- `LeafCollected`逐片反馈已携带服务端权威`WorldPosition`，客户端使用`ReplicatedStorage.tishi`对象池在实际收取位置显示对应Leaf图片和倍率后`+价值`；旧`HUDRoot.GetHint`保持隐藏，Quick Sell不创建世界提示。
+- 正确大厅Place通过Studio MCP Play实测：提示出现后立即向上漂浮，总计1.4秒上升3 studs；前0.6秒图片和文字保持完全可见，后0.8秒继续上升并淡出，完成后对象正确回收复用。
+- 排期与活动提示共享30个额度并保持0.04秒节奏；无效坐标、缺失模板、超额提示或动画失败均不改变真实背包收益。
+- Server Bootstrap完成，Client Bootstrap为`succeeded=32 failed=0 skipped=0`，Output未发现世界提示控制器错误；测试结束后Automatic已恢复`OFF`并停止Play。
+- `scripts\verify-project.cmd`通过（16功能域、106 Luau、50 Remote、Schema 33），`git diff --check`通过。Coop Place的`tishi`模板因当前未连接对应Studio仍为待核验。
+
+## 2026-08-18 合作副本返回大厅与初始化修复专项
+
+- 大厅和合作副本两个Studio同时连接同一Rojo源码；副本Edit确认PlaceId为`131244809352557`，`HandUpgradeConfig.MakeDefaultLevels`已同步为函数，`fanhui.Return`、`fanhuidating.Return/no`均为有效TextButton。
+- 修复合作覆盖层调用不存在的Hand默认等级接口；副本冷Play不再出现`PlayerDataService:1324 attempt to call a nil value`，Server Bootstrap完成，Client Bootstrap为`succeeded=21 failed=0 skipped=0`。
+- 副本服务端快照准确包含550片（Area01正式450 + Area02预览100）；当前Streaming位置客户端观察到Area01约211个、Area02约3个模型，确认逻辑钱币和可见模型均恢复。
+- 副本运行时`fanhui.Return`可见且`fanhui.Lobby`隐藏；点击外层按钮只打开确认Frame，点击`no`关闭且不返回。Studio确认返回触发预期的跨Place失败后，确认面板关闭且三个按钮全部恢复可交互，没有卡住请求锁。
+- 大厅Place短Play确认`fanhui.Lobby`继续可见可交互，副本Return/确认Frame不存在或保持隐藏，服务端控制台无Error。
+- `scripts\verify-project.cmd`通过（16功能域、106 Luau、50 Remote、Schema 33），`git diff --check`通过。原大厅JobId优先返回及原服不可用后的正式回退仍需发布环境跨Place验收，Studio不支持真实跨Place传送。
+
+## 2026-08-18 合作副本钱币快照清场修复专项
+
+- 根因确认为合作`YardLeafSnapshot`使用`OwnerUserId=0/ScopeKind=Coop`后，普通`StateSnapshot.ActiveYardOwnerUserId`又以玩家UserId触发客户端庭院切换清场；修复后合作Place只由当前Coop作用域维护叶子世界，普通状态快照仍更新工具范围和区域进度但不清场。
+- 合作副本冷Play实际捕获完整快照550片，其中Area01正式450片、Area02预览100片，`ScopeKind=Coop`且`OwnerUserId=0`；客户端Area01可见模型保持211个。
+- 连续请求5次普通`StateSnapshot`，再注入错误Yard Begin和不同ScopeId的Coop Begin后，Area01仍保持211个可见模型；随后合法重同步仍收到完整550片且世界未消失。Studio由首个合法Coop Begin锁定作用域，发布环境继续严格匹配真实`game.JobId`。
+- 大厅Place回归捕获`ScopeKind=Yard`、OwnerId/ScopeId均为测试玩家UserId；大厅共享池逻辑数继续增长且可见模型保持，连续状态请求未清空普通庭院或Lobby文件夹。
+- 合作Client Bootstrap为`succeeded=21 failed=0 skipped=0`，大厅为`succeeded=32 failed=0 skipped=0`；两边Output均未发现脚本Error。双人共享收取、正式发布服非本JobId拒绝和好友庭院切换仍保留为完整多人/发布环境验收项。
+
+## 2026-08-18 合作副本拾取状态修复专项
+
+- 根因确认为玩家晚于`CoopMatchService:Init()`加入时，模块级Teleport上下文虽已建立，但运行服务仍保留空Fallback名单，快照长期为`Expected=0/Arrived=0/Waiting`，因此`LeafService.CoopGameplayEnabled=false`并拒绝全部清扫入口。
+- 合作服务现于`PlayerDataService`开始加载前初始化；合法入场立即同步名单和难度，状态Ready时再次防御性同步。10秒窗口改为从第一名合法Ready成员开始，等待期间离开的成员不再计为已到达。
+- 正确副本Place `131244809352557`经Studio MCP冷Play确认快照为`Expected=1/Arrived=1/Playing`。Tool01真实鼠标输入使Area01累计和背包从0升至3；Tool04短按继续升至45；Automatic在移动到新目标后继续升至54，证明仍复用统一收取入口。
+- 副本现有`ReplicatedStorage.tishi`层级与大厅一致，实际收取时捕获到世界`+1`、正确Leaf图片和权威位置。副本Server/Client控制台均无Warning/Error。
+- 大厅Place `95556867008792`回归仍发送`ScopeKind=Yard`，Lobby共享池快照继续增长且无控制台Warning/Error。Tool02/03未在本次账号的合作临时库存中解锁，保留同一活动状态机的完整购买后实机回归项。
+- `scripts\verify-project.cmd`通过（16功能域、106 Luau、50 Remote、Schema 33），`git diff --check`通过；正式Reserved Server的2～4人提前到齐/10秒超时仍需发布环境跨Place验收。
+
+## 2026-08-19 门金币不足引导区域重置台专项
+
+- `AreaDoorService`只在自己庭院、顺序和前置清理校验通过且权威余额不足时发送`AreaDoorCoinShortageNotice`；payload包含目标区域、当前/所需Coins及`LeafService`给出的ResetCoin资格、状态和英文条件，不改变门扣款与解锁事务。
+- 可重置时客户端常驻显示`Reset cleared areas to earn more Coins.`，并复用唯一门引导Beam指向`Workspace.Function.Reset`；已有ResetCoin未收完时只显示`Collect all reset coins before resetting again.`且不指向Reset或无钱可开的门。
+- 到达Reset Prompt后本轮Beam与常驻提示立即清除，并压制旧门目标；关闭确认面板不会自动指回门，下一次真实碰门才重新请求权威判断。门购买、Reset成功、Rebirth、完整清档、访问其他庭院和资格失效均有清理路径；普通死亡保留有效的前往Reset状态并在新角色上恢复。
+- 正确大厅Place `95556867008792`通过Studio MCP确认`Workspace.Function.Reset`为已加载`BasePart`；Server Bootstrap完成，Client Bootstrap为`succeeded=32 failed=0 skipped=0`，`AreaDoorService`、`AreaDoorController`和`AreaCoinResetController`均初始化成功。控制台仅保留无关的`Workspace.Function.3Kback`永久背包价格牌缺失警告。
+- 运行态未改玩家Coins、区域进度、门状态或ResetCoin；真实“余额不足碰门 → Prompt → 确认Reset”的完整交互仍需使用满足条件的测试档复验。
+
+## 2026-08-19 官方邀请替换旧庭院访问专项
+
+- 源码删除旧`YardUIController`、`VisitorBillboardController`、`YardInviteService`及六个自定义邀请/访问/权限Remote；新增`OfficialInviteController`，大厅`Frame.invite`经`CanSendGameInviteAsync()`后打开Roblox官方邀请界面，Coop只隐藏该按钮。
+- `YardService`收束为玩家本人Owner；普通叶子、便便与失物按个人庭院隔离，Tool05只投影到制造者自己的庭院。Coop仍使用独立共享叶子与便便池，Lobby共享对象保持不变。
+- 主存档Schema提升为34；`AllowGuestPoop`只参与旧字段迁移检测，不进入运行态、保存payload或快照。旧好友奖励字段及`ClaimFriendRewards`继续保留，并由独立`FriendRewardController`显示和领取。
+- `scripts\verify-project.cmd`通过（16功能域、105 Luau、44 Remote、77个快照字段、34个持久字段、Schema 34），`git diff --check`通过。当前没有Studio MCP实例连接，因此大厅/Coop Bootstrap和旧UI物理删除兼容均标记待Studio核验；官方邀请真实弹窗及平台不可用分支必须在发布体验验收。
+
+## 2026-08-19 合作副本本场景Lobby返回专项
+
+- `fanhui.Lobby`改为在大厅与Coop都显示；它继续复用`RequestReturnToSpawn`，只停止当前清扫/工具动作并把角色移动到当前Place唯一启用的`Workspace.SpawnLocation`。跨Place保存返回仍只由`fanhui.Return`及确认框负责。
+- 初次只改显示后发现Coop启动表仍禁用`LobbyReturnController`，因此按钮没有点击连接；现已解除该禁用，并让`CoopMatchController`显式依赖它，保证后者最后恢复跨Place Return控件，不存在并发初始化反向隐藏。
+- 大厅与副本两个Studio同时连接并确认同一Rojo源码已同步。Coop运行态实际读取到`Lobby=true`、`Return=true`、确认框`false`、官方邀请按钮`false`；用选择输入实际点击Lobby后，角色从距Spawn约58.20 studs回到约1.95 studs，合作确认框未误开。
+- Coop Server Bootstrap完成，Client Bootstrap为`succeeded=23 failed=0 skipped=0`；大厅Server Bootstrap完成，Client Bootstrap为`succeeded=32 failed=0 skipped=0`，大厅`Lobby/invite`均显示且可交互，副本Return/确认节点缺失也不影响启动。两个Place控制台均无脚本Warning/Error；`scripts\verify-project.cmd`与`git diff --check`通过。
+
+## 2026-08-19 四匹配台世界状态牌专项
+
+- 大厅四个匹配台已迁移到`join.BillboardGui.Frame`权威显示：`04`为当前/目标人数，`easy`为难度，`TextLabel`只在确认后的15秒显示`Starting in Ns`。世界倒计时由服务端每0.2秒按同一Deadline刷新并缓存上次写入，等待、保存、传送及失败恢复时隐藏。
+- Studio更新后现场四个匹配台一度全部同名`place004`，导致服务等待`place001`并停滞；已按Z坐标从小到大恢复为`place001`～`place004`，位置、状态牌结构和视觉样式未修改。冷启动后`PartyMatchmakingService`在1ms内完成初始化。
+- 四台冷启动均为`0/4 / EASY / 隐藏倒计时`。place004实测独立显示`1/3 / HARD / Starting in 1s`，其余三台保持默认；Studio传送HTTP 403后倒计时隐藏并保留真实`1/3 / HARD`，成员退出后恢复`0/4 / EASY`。
+- 当前Coop Place没有`Function.place001`～`place004`，运行时安全启动且不存在可见匹配牌；契约已修正为副本不强制复制大厅匹配台，若未来保留则继续由`CoopMatchService`禁用BillboardGui。
+
+## 2026-08-19 组队等待条与退出落点专项
+
+- `PartyController`现让所有入队成员显示`GameHUD.Team0EXC`，仅让Waiting状态房主额外显示配置面板`Team001`；房主确认后配置面板隐藏而等待条持续到离队或传送。`Team0EXC.esc`与配置面板旧esc共用权威Leave请求。
+- 服务端Leave在删除成员后按对应台`CFrame.LookVector`把角色移到检测边距外并朝向该台，清零线速度和角速度；仍保留`ExitSuppressedParty`防止边界抖动重新入队。
+- 大厅place003实测：房主入队后`Team001/Team0EXC=true/true`，确认后为`false/true`；选择`Team0EXC.esc`后两者均隐藏、世界人数恢复`0/4`，角色位于组队台本地坐标约`Z=-9`且权威检测结果为区域外，没有立即重新入队。
+- 冷启动`PartyMatchmakingService`和`PartyController`均成功；Output没有本功能脚本错误。历史Studio跨Place测试仍可能输出预期的Teleport HTTP 403，不影响退出逻辑。
+
+## 2026-08-19 Automatic新UI结构修复专项
+
+- 根因确认为大厅`HUDRoot.Automatic`已改为直属`off/OP`两个TextLabel，但控制器仍无限等待旧`TextLabel`，导致按钮点击未绑定并让Automatic依赖任务停滞。控制器现只写`off`的ON/OFF，保留`OP`标题，并继续切换直属`UIGradient1/UIGradient2`。
+- UI节点解析改为非等待校验；`Automatic/off/OP/UIGradient1/UIGradient2`任一缺失或类型错误时只输出明确警告、关闭按钮交互并完成初始化，不再阻塞Coin Flip或Coop依赖控制器。
+- 大厅Place `95556867008792`冷Play确认Client Bootstrap完成、Automatic控制器成功且无Infinite Yield/STALLED；实际点击得到`ON / UIGradient1=true / UIGradient2=false`，再次点击恢复`OFF / false / true`，`OP Aouto Clcker`全程未被改写。清扫状态机没有改动，继续使用2026-08-14已验收的`SetLeafPickupActive`持续长按实现。
+- Coop Place `131244809352557`已同步同一`off/OP`结构；冷Play确认Automatic与Coop控制器均成功、Client Bootstrap完成且无缺失UI警告，按钮同样完成OFF→ON切换。现有合作清扫仍复用统一`SetLeafPickupActive`状态机，完整工具节拍沿用专项回归项。
+- `scripts\verify-project.cmd`和`git diff --check`通过；无调试日志残留，两个Studio测试结束后均停止Play。
+
+## 2026-08-19 便便兑换引导两次上限专项
+
+- 主存档Schema提升为35，`OnboardingFunnel.PoopRedeemGuidanceShownCount`持久钳制为0～2；旧档缺少该字段且`PoopGuidanceCompleted=true`时迁移为2，未完成旧档按0继续首次完整流程。Rebirth保留已用次数并关闭当前目标，管理员完整清档归零。
+- `TutorialService`只消费`PoopService`在失物库存成功提交后的回调。Studio服务级回归确认第一次目标计为1、同一Sell阶段额外拾取不替换目标或加次数、兑换后下一次目标计为2、第三次拾取不再产生阶段或目标；未兑换离服后的模拟状态保留1并让下一次有效拾取使用剩余额度。
+- `LostItemGuidanceController`按共享`LostItemConfig.PoopOnly`过滤通用携带物引导。Studio客户端方法回归结果为普通`LostItem001`继续引导、`LostItem095`通用引导关闭、权威`Pickup/Sell`阶段仍正常显示。
+- 大厅Place `95556867008792`确认Schema 35、计数逻辑和客户端过滤源码均已Rojo同步；Server Bootstrap完成，Client Bootstrap为`succeeded=32 failed=0 skipped=0`。Coop Place `131244809352557`同步同一源码，但运行时按设计不初始化服务端教程或客户端失物引导，Client Bootstrap为`succeeded=23 failed=0 skipped=0`。两个Place均已停止Play。
+- `scripts\verify-project.cmd`通过（16功能域、105 Luau、44 Remote、77个快照字段、34个持久顶层字段、Schema 35），`git diff --check`通过。真实发布DataStore的旧档迁移、离服重进与Quick Sell/实体商店完整交互仍保留为发布环境验收项。
+
+## 2026-08-19 首次高级定时幸运箱120秒专项
+
+- `LostItemConfig.TimedLuckyBox.FirstDelaySeconds`改为120，`RecurringDelaySeconds`保持300；大厅Place `95556867008792`与Coop Place `131244809352557`运行态均实际读取为`First=120 / Recurring=300`。
+- 两个Place的`GameHUD.HUDRoot.time.Value`均核验为有效TextLabel；新一轮首次倒计时显示`2m0s`并持续递减，Coop运行态捕获到`1m43s`，大厅运行态捕获到`0m44s`及`0m0s`。
+- 大厅Server/Client Bootstrap完成，Client为`succeeded=33 failed=0 skipped=0`；Coop Server/Client Bootstrap完成，Client为`succeeded=24 failed=0 skipped=0`，两边未发现本功能脚本错误。
+- `scripts\verify-project.cmd`通过（16功能域、106 Luau、44 Remote、77个快照字段、34个持久顶层字段、Schema 35）。完整120秒后箱子实例出现、未领取重进重新计时及首次奖励入库后切换`5m0s`仍保留为发布/持续Play验收项；`git diff --check`仅被工作区既有`src/server/AdminTestConfig.luau:11`尾随空白阻塞，本次未修改该无关文件。
+
+## 2026-08-19 金币重生、门无清区门槛与重生后重新购门专项
+
+- 普通重生资格已改为`Coins >= round(500 × 1.5 ^ RebirthCount)`或本轮彩虹便便达到要求任一项成立，不再读取区域清理比例；权威快照新增`RebirthRequiredCoins`。两个Place的Studio默认值统一为`Money 500 or find 0/5`、`0/500`和空金币进度。
+- `AreaDoorService`只保留玩家本人、顺序与余额校验，不再要求前区清完；所有已付费解锁区域立即成为正式可收取区域。普通或SKIP重生继续由统一`ResetForRebirth`重建状态，只保留Area_01；Door02～08重新锁定并按`BaseUnlockPrice × (1 + 0.5 × 新RebirthCount)`再次购买，普通死亡和重新加入保留本轮已购门。
+- 大厅与Coop Edit运行态配置均核验：重生金币0～3次为`500/750/1125/1688`；Door05为`3000/4500/6000/7500`，Door08为`14500/21750/29000/36250`，门动画边界为10～30个。大厅Play使用Rebirth 1测试档显示`Money 750 or find 1/10`、`750/750`、Door02价格`x15`且锁定。
+- 门权威扣款成功后客户端使用独立`tishi`池显示指定金币图片和完整负门价，以`alpha²`逐渐加速飞向实际碰撞门；每枚抵达复用Recycle声音并脉冲门板，最后一次脉冲后才按权威状态开门。该表现不执行真实扣款或写`UnlockedAreas`。
+- Coop Play确认门价、`Frame.Rebirth`、重生确认和Reset面板全部隐藏，Area01钱币保持可见；大厅与Coop Client Bootstrap均完成且本功能无运行时错误。MCP诊断过程中两次调用不存在/未初始化的服务方法产生`AssistantCommand`错误，仅属于测试命令，不来自生产脚本。
+- `scripts\verify-project.cmd`通过（16功能域、106 Luau、44 Remote、78个快照字段、34个持久顶层字段、Schema 35）。`git diff --check`仍仅被工作区既有`src/server/AdminTestConfig.luau:11`尾随空白阻塞，本次未修改该无关文件；真实逐枚门动画视觉、余额不足提示和完整重生交互仍保留为手动/发布环境验收项。
+
+## 2026-08-19 区域门累计前置清理条件恢复专项
+
+- 普通门恢复旧的累计正式清理条件：解锁Area N前，`AreaUnlockConfig.IsClearRequirementMet()`要求Area01到Area(N-1)的`YardProgress.Areas[].ClearedRatio`全部达到1；ResetCoin、Lobby和Coop钱币不参与该检查。
+- `AreaDoorService`在任何`TrySpend`之前校验累计清理进度。隔离回归中，Area05前缺少Area03完成记录时准确提示`Clear all areas through Woods to unlock Basketball Court.`，扣款、生成、快照和`CoinSpendEvent`调用均为0；Area01～04全清但金币不足时只提示`You need 4.5k Coins.`且不解锁；全清且金币足够时只扣一次4500、只生成一次Area05并只发送一次门动画事件。
+- 客户端重新读取`HomeYardProgress`决定下一门引导：Area01未完成时目标为nil，Area01完成时目标为Area02；Area05前缺Area03完成记录时目标为nil，Area01～04全部完成时目标为Area05。门价、金币飞行动画、重生金币资格和Rebirth后重新购门规则未改变。
+- 大厅与Coop两个Place的Edit模块边界验证一致：Door02空进度为false、Area01完成为true；Door05缺Area03或Area04为0.999时均为false，Area01～04全1时为true；Rebirth 1的Door05价格仍为4500。Coop Play保持门价、Rebirth和Reset隐藏，普通门引导Beam为0且Area01钱币继续显示。
+- `scripts\verify-project.cmd`通过（16功能域、106 Luau、44 Remote、78个快照字段、34个持久顶层字段、Schema 35）。大厅本轮Play因`PlayerGui.GameHUD`复制较慢出现既有控制器`WaitForChild`提示，但最终Client Bootstrap为`succeeded=33 failed=0 skipped=0`；Coop Client Bootstrap为`succeeded=24 failed=0 skipped=0`且无本功能错误。

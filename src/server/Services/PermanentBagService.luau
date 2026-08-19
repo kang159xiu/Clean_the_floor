@@ -161,10 +161,10 @@ end
 
 function PermanentBagService:_promptPurchase(player, config)
 	if not BagConfig.IsPermanentBagEnabled(config.Id) then
-		return
+		return false
 	end
 	if purchasePromptLocks[player] then
-		return
+		return false
 	end
 	local promptToken = {}
 	purchasePromptLocks[player] = promptToken
@@ -175,13 +175,14 @@ function PermanentBagService:_promptPurchase(player, config)
 		purchasePromptLocks[player] = nil
 		warn(string.format("%s purchase prompt failed for %s: %s", config.Id, player.Name, tostring(message)))
 		self.PlayerDataService:Notify(player, config.Name .. " purchase window is unavailable.")
-		return
+		return false
 	end
 	task.delay(PURCHASE_PROMPT_TIMEOUT, function()
 		if purchasePromptLocks[player] == promptToken then
 			purchasePromptLocks[player] = nil
 		end
 	end)
+	return true
 end
 
 function PermanentBagService:_equipOwnedBagAppearance(player, config)
@@ -210,7 +211,7 @@ function PermanentBagService:_onStationTriggered(player, config)
 		or player.Parent ~= Players
 		or not self.PlayerDataService:GetState(player)
 	then
-		return
+		return false
 	end
 	local state = ownershipByPlayer[player]
 	local entry = state and state[config.Id]
@@ -218,20 +219,29 @@ function PermanentBagService:_onStationTriggered(player, config)
 		local ready, owned = self:_refreshSingleOwnership(player, config)
 		if not ready then
 			self.PlayerDataService:Notify(player, "Game Pass ownership could not be confirmed. Try again later.")
-			return
+			return false
 		end
 		if owned then
-			self:_equipOwnedBagFromCache(player, config)
-			return
+			return self:_equipOwnedBagFromCache(player, config)
 		end
 	end
 
 	local ownership = self:_getOwnershipMaps(player)
 	if ownership[config.Id] == true then
-		self:_equipOwnedBagFromCache(player, config)
-		return
+		return self:_equipOwnedBagFromCache(player, config)
 	end
-	self:_promptPurchase(player, config)
+	return self:_promptPurchase(player, config)
+end
+
+function PermanentBagService:RequestBagPurchase(player, bagId)
+	if type(bagId) ~= "string" or #bagId > 32 then
+		return false
+	end
+	local config = BagConfig.PermanentBags[bagId]
+	if not config or not BagConfig.IsCapacityPermanentBag(bagId) then
+		return false
+	end
+	return self:_onStationTriggered(player, config)
 end
 
 function PermanentBagService:_tryBindStation(station)

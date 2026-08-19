@@ -84,18 +84,48 @@ function RebirthController:_applyMultiplierText(rebirthCount)
 	self.RebirthCountText.Text = tostring(currentCount)
 end
 
+function RebirthController:_applyMoneyProgress(currentCoins, requiredCoins)
+	local normalizedRequiredCoins = math.max(1, tonumber(requiredCoins) or RebirthConfig.GetRequiredCoins(0))
+	local normalizedCurrentCoins = math.clamp(
+		math.floor(tonumber(currentCoins) or 0),
+		0,
+		normalizedRequiredCoins
+	)
+	self.MoneyProgressText.Text = string.format(
+		"%s/%s",
+		tostring(normalizedCurrentCoins),
+		tostring(normalizedRequiredCoins)
+	)
+	local ratio = math.clamp(normalizedCurrentCoins / normalizedRequiredCoins, 0, 1)
+	self.MoneyProgressFill.Size = UDim2.new(
+		ratio,
+		0,
+		self.MoneyProgressFillHeight.Scale,
+		self.MoneyProgressFillHeight.Offset
+	)
+end
+
 function RebirthController:ApplySnapshot(snapshot)
 	if type(snapshot) ~= "table" then
 		return
 	end
 	self.Eligible = snapshot.RebirthEligible == true
+	local rebirthCount = RebirthConfig.NormalizeCount(snapshot.RebirthCount)
+	local requiredCoins = math.max(
+		1,
+		tonumber(snapshot.RebirthRequiredCoins) or RebirthConfig.GetRequiredCoins(rebirthCount)
+	)
 	self.RequirementText = RebirthConfig.GetRequirementText(
-		snapshot.UnlockedAreas,
+		requiredCoins,
 		snapshot.RainbowPoopFoundCount,
 		snapshot.RainbowPoopRequiredCount
 	)
-	self.ExplainText.Text = self.RequirementText
-	local rebirthCount = RebirthConfig.NormalizeCount(snapshot.RebirthCount)
+	self.MoneyExplainText.Text = RebirthConfig.GetMoneyRequirementText(requiredCoins)
+	self.ExplainText.Text = RebirthConfig.GetRainbowPoopRequirementText(
+		snapshot.RainbowPoopFoundCount,
+		snapshot.RainbowPoopRequiredCount
+	)
+	self:_applyMoneyProgress(snapshot.Coins, requiredCoins)
 	local previousRebirthCount = self.LastRebirthCount
 	self.LastRebirthCount = rebirthCount
 	self:_applyMultiplierText(rebirthCount)
@@ -162,7 +192,12 @@ function RebirthController:Init(remotes, hudController)
 	self.RequestRunning = false
 	self.SkipPromptRunning = false
 	self.LastRebirthCount = nil
-	self.RequirementText = RebirthConfig.GetRequirementText({}, 0, RebirthConfig.GetRainbowPoopRequiredCount(0))
+	local initialRequiredCoins = RebirthConfig.GetRequiredCoins(0)
+	self.RequirementText = RebirthConfig.GetRequirementText(
+		initialRequiredCoins,
+		0,
+		RebirthConfig.GetRainbowPoopRequiredCount(0)
+	)
 	self.Player = Players.LocalPlayer
 	self.SkipProduct = ProductConfig.DeveloperProducts.SkipRebirth
 	assert(
@@ -173,9 +208,36 @@ function RebirthController:Init(remotes, hudController)
 	local playerGui = self.Player:WaitForChild("PlayerGui")
 	local gameHUD = playerGui:WaitForChild("GameHUD")
 	self.Panel = gameHUD:WaitForChild("chongshengqueren")
+	self.MoneyExplainText = self.Panel:WaitForChild("monexplain")
+	assert(
+		self.MoneyExplainText:IsA("TextLabel"),
+		"GameHUD.chongshengqueren.monexplain must be a TextLabel"
+	)
 	self.ExplainText = self.Panel:WaitForChild("explain")
 	assert(self.ExplainText:IsA("TextLabel"), "GameHUD.chongshengqueren.explain must be a TextLabel")
-	self.ExplainText.Text = self.RequirementText
+	self.MoneyExplainText.Text = RebirthConfig.GetMoneyRequirementText(initialRequiredCoins)
+	self.ExplainText.Text = RebirthConfig.GetRainbowPoopRequirementText(
+		0,
+		RebirthConfig.GetRainbowPoopRequiredCount(0)
+	)
+	local moneyProgress = self.Panel:WaitForChild("jindu")
+	assert(moneyProgress:IsA("GuiObject"), "GameHUD.chongshengqueren.jindu must be a GuiObject")
+	self.MoneyProgressText = moneyProgress:FindFirstChild("Name")
+	assert(
+		self.MoneyProgressText and self.MoneyProgressText:IsA("TextLabel"),
+		"GameHUD.chongshengqueren.jindu.Name must be a TextLabel"
+	)
+	local moneyProgressBackground = moneyProgress:WaitForChild("BarBackground")
+	assert(
+		moneyProgressBackground:IsA("GuiObject"),
+		"GameHUD.chongshengqueren.jindu.BarBackground must be a GuiObject"
+	)
+	self.MoneyProgressFill = moneyProgressBackground:WaitForChild("Fill")
+	assert(
+		self.MoneyProgressFill:IsA("GuiObject"),
+		"GameHUD.chongshengqueren.jindu.BarBackground.Fill must be a GuiObject"
+	)
+	self.MoneyProgressFillHeight = self.MoneyProgressFill.Size.Y
 	self.OpenButton = gameHUD:WaitForChild("Frame"):WaitForChild("Rebirth")
 	self.Reminder = self.OpenButton:WaitForChild("tixin")
 	assert(self.Reminder:IsA("ImageLabel"), "GameHUD.Frame.Rebirth.tixin must be an ImageLabel")
@@ -214,6 +276,7 @@ function RebirthController:Init(remotes, hudController)
 		self:_setPanelVisible(false)
 	end)
 	self:_applyMultiplierText(0)
+	self:_applyMoneyProgress(0, initialRequiredCoins)
 	self:_refreshButtonState()
 
 	self.OpenButton.Activated:Connect(function()

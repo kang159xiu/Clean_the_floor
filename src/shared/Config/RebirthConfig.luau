@@ -1,12 +1,11 @@
 local RebirthConfig = {
 	BaseLeafCountMultiplier = 1,
 	LeafCountMultiplierPerRebirth = 0.5,
-	BaseLeafValueMultiplier = 1,
-	LeafValueMultiplierPerRebirth = 1.5,
-	PriceMultiplierPerRebirth = 2,
+	ToolAndUpgradePriceMultiplierPerRebirth = 1.5,
 	RainbowPoopPerRebirth = 5,
-	MinimumRequiredAreaCount = 4,
-	MaximumRequiredAreaCount = 8,
+	BaseRequiredCoins = 500,
+	RequiredCoinsMultiplierPerRebirth = 2.5,
+	MaximumRequiredCoins = 1e100,
 }
 
 function RebirthConfig.NormalizeCount(value)
@@ -19,26 +18,34 @@ function RebirthConfig.GetLeafCountMultiplier(rebirthCount)
 end
 
 function RebirthConfig.GetLeafValueMultiplier(rebirthCount)
-	return RebirthConfig.BaseLeafValueMultiplier
-		+ RebirthConfig.NormalizeCount(rebirthCount) * RebirthConfig.LeafValueMultiplierPerRebirth
+	return RebirthConfig.NormalizeCount(rebirthCount) + 1
 end
 
 function RebirthConfig.GetRainbowPoopRequiredCount(rebirthCount)
 	return (RebirthConfig.NormalizeCount(rebirthCount) + 1) * RebirthConfig.RainbowPoopPerRebirth
 end
 
-function RebirthConfig.GetRequiredAreaCount(unlockedAreas)
-	local requiredAreaCount = RebirthConfig.MinimumRequiredAreaCount
-	local unlocked = type(unlockedAreas) == "table" and unlockedAreas or {}
-	for areaNumber = RebirthConfig.MinimumRequiredAreaCount + 1, RebirthConfig.MaximumRequiredAreaCount do
-		if unlocked[string.format("Area_%02d", areaNumber)] == true then
-			requiredAreaCount = areaNumber
-		end
+function RebirthConfig.GetRequiredCoins(rebirthCount)
+	local requiredCoins = RebirthConfig.BaseRequiredCoins
+		* RebirthConfig.RequiredCoinsMultiplierPerRebirth ^ RebirthConfig.NormalizeCount(rebirthCount)
+	if requiredCoins ~= requiredCoins or requiredCoins == math.huge then
+		return RebirthConfig.MaximumRequiredCoins
 	end
-	return requiredAreaCount
+	return math.min(
+		RebirthConfig.MaximumRequiredCoins,
+		math.max(0, math.floor(requiredCoins + 0.5))
+	)
 end
 
-function RebirthConfig.GetRequirementText(unlockedAreas, rainbowPoopFoundCount, rainbowPoopRequiredCount)
+function RebirthConfig.GetMoneyRequirementText(requiredCoins)
+	local normalizedRequiredCoins = math.max(
+		0,
+		tonumber(requiredCoins) or RebirthConfig.GetRequiredCoins(0)
+	)
+	return string.format("Money %s", tostring(normalizedRequiredCoins))
+end
+
+function RebirthConfig.GetRainbowPoopRequirementText(rainbowPoopFoundCount, rainbowPoopRequiredCount)
 	local requiredPoopCount = math.max(
 		1,
 		math.floor(tonumber(rainbowPoopRequiredCount) or RebirthConfig.RainbowPoopPerRebirth)
@@ -48,24 +55,31 @@ function RebirthConfig.GetRequirementText(unlockedAreas, rainbowPoopFoundCount, 
 		0,
 		requiredPoopCount
 	)
+	return string.format("find %d/%d", foundPoopCount, requiredPoopCount)
+end
+
+function RebirthConfig.GetRequirementText(requiredCoins, rainbowPoopFoundCount, rainbowPoopRequiredCount)
 	return string.format(
-		"Clear Areas 1-%d or find %d/%d",
-		RebirthConfig.GetRequiredAreaCount(unlockedAreas),
-		foundPoopCount,
-		requiredPoopCount
+		"%s or %s",
+		RebirthConfig.GetMoneyRequirementText(requiredCoins),
+		RebirthConfig.GetRainbowPoopRequirementText(
+			rainbowPoopFoundCount,
+			rainbowPoopRequiredCount
+		)
 	)
 end
 
-function RebirthConfig.GetPriceMultiplier(rebirthCount)
-	return RebirthConfig.PriceMultiplierPerRebirth ^ RebirthConfig.NormalizeCount(rebirthCount)
+function RebirthConfig.GetToolAndUpgradePriceMultiplier(rebirthCount)
+	return RebirthConfig.ToolAndUpgradePriceMultiplierPerRebirth
+		^ RebirthConfig.NormalizeCount(rebirthCount)
 end
 
-function RebirthConfig.GetScaledPrice(basePrice, rebirthCount)
+function RebirthConfig.GetScaledToolAndUpgradePrice(basePrice, rebirthCount)
 	local price = tonumber(basePrice)
 	if not price or price <= 0 then
 		return 0
 	end
-	local scaledPrice = price * RebirthConfig.GetPriceMultiplier(rebirthCount)
+	local scaledPrice = price * RebirthConfig.GetToolAndUpgradePriceMultiplier(rebirthCount)
 	if scaledPrice == math.huge then
 		return math.huge
 	end

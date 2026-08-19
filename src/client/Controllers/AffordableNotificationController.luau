@@ -259,7 +259,7 @@ function AffordableNotificationController:_hasAffordablePanelUpgrade(snapshot)
 		local effectiveMax = (attributeId == "MoveSpeed" and walkSpeed >= PlayerAttributeConfig.MaximumWalkSpeed)
 			or PlayerAttributeConfig.IsConfiguredMaxLevel(attributeId, level)
 		if not effectiveMax then
-			local price = PlayerAttributeConfig.GetUpgradePrice(attributeId, level)
+			local price = PlayerAttributeConfig.GetUpgradePrice(attributeId, level, rebirthCount)
 			if price and coins >= price then
 				return true
 			end
@@ -293,7 +293,7 @@ function AffordableNotificationController:_buildCandidates(snapshot)
 
 	for _, toolId in PANEL_TOOL_IDS do
 		local tool = ToolConfig.ById[toolId]
-		local price = RebirthConfig.GetScaledPrice(tool.Price, rebirthCount)
+		local price = RebirthConfig.GetScaledToolAndUpgradePrice(tool.Price, rebirthCount)
 		if
 			tool.AvailableForGameplay == true
 			and tool.UnlockedByDefault ~= true

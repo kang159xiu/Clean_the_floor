@@ -22,7 +22,6 @@ function AdminResetService:_tryReset(player)
 	end
 
 	requestLocks[player] = true
-	self.YardService:ReturnHome(player)
 	self.ToolActionService:StopPlayer(player)
 	self.LeafService:SetPickupActive(player, false)
 	local toolResetBegan = self.CleaningToolService:BeginPlayerReset(player)
@@ -63,7 +62,6 @@ end
 
 function AdminResetService:Init(
 	playerDataService,
-	yardService,
 	leafService,
 	lostItemService,
 	tutorialService,
@@ -73,7 +71,6 @@ function AdminResetService:Init(
 	resetRemote
 )
 	self.PlayerDataService = playerDataService
-	self.YardService = yardService
 	self.LeafService = leafService
 	self.LostItemService = lostItemService
 	self.TutorialService = tutorialService

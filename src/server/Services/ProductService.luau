@@ -146,7 +146,7 @@ function ProductService:_purchaseTool(player, product)
 		return
 	end
 
-	local price = RebirthConfig.GetScaledPrice(toolConfig.Price, state.RebirthCount)
+	local price = RebirthConfig.GetScaledToolAndUpgradePrice(toolConfig.Price, state.RebirthCount)
 	if not self.EconomyService:TrySpend(player, price) then
 		self.PlayerDataService:Notify(
 			player,
@@ -185,7 +185,7 @@ function ProductService:_purchaseBagExpansion(player, state)
 	local price = BagConfig.GetNextExpansionPrice(currentExpansionLevel)
 	if not price then
 		self.PlayerDataService:Notify(player, "Backpack expansion is unavailable.")
-		return
+		return false
 	end
 
 	if not self.EconomyService:TrySpend(player, price) then
@@ -193,7 +193,7 @@ function ProductService:_purchaseBagExpansion(player, state)
 			player,
 			string.format("Not enough Coins. You need %s.", CoinFormat.Compact(price))
 		)
-		return
+		return false
 	end
 
 	local nextExpansionLevel = currentExpansionLevel + 1
@@ -217,24 +217,25 @@ function ProductService:_purchaseBagExpansion(player, state)
 		string.format("Expanded backpack capacity to %s.", CoinFormat.Compact(capacity))
 	)
 	self.PlayerDataService:PushSnapshot(player)
+	return true
 end
 
-function ProductService:_purchaseBagUpgrade(player, product)
+function ProductService:_purchaseBagUpgrade(player, product, requestedTargetId, promptRobuxOnShortage)
 	if purchaseLocks[player] then
-		return
+		return false
 	end
 	purchaseLocks[player] = true
 
 	local state = self.PlayerDataService:GetState(player)
 	if not state then
 		purchaseLocks[player] = nil
-		return
+		return false
 	end
 
 	if product.Kind ~= "BagUpgrade" then
 		warn("Unsupported product kind: " .. tostring(product.Kind))
 		purchaseLocks[player] = nil
-		return
+		return false
 	end
 	for _, bagId in BagConfig.PermanentOrder do
 		if
@@ -243,21 +244,29 @@ function ProductService:_purchaseBagUpgrade(player, product)
 		then
 			self.PlayerDataService:Notify(player, "Checking permanent backpack ownership. Please wait.")
 			purchaseLocks[player] = nil
-			return
+			return false
 		end
 	end
 
 	local activePermanentBagId = self.PlayerDataService:GetActivePermanentBagId(state)
 	if BagConfig.CanPurchaseExpansion(state.BagLevel, activePermanentBagId) then
-		self:_purchaseBagExpansion(player, state)
+		if requestedTargetId ~= nil and requestedTargetId ~= "Expansion" then
+			purchaseLocks[player] = nil
+			return false
+		end
+		local purchased = self:_purchaseBagExpansion(player, state)
 		purchaseLocks[player] = nil
-		return
+		return purchased
 	end
 
+	if requestedTargetId == "Expansion" then
+		purchaseLocks[player] = nil
+		return false
+	end
 	if activePermanentBagId ~= nil then
 		self.PlayerDataService:Notify(player, "Your permanent backpack is active. No standard upgrade is needed.")
 		purchaseLocks[player] = nil
-		return
+		return false
 	end
 
 	local nextLevel = state.BagLevel + 1
@@ -265,7 +274,11 @@ function ProductService:_purchaseBagUpgrade(player, product)
 	if not itemConfig then
 		self.PlayerDataService:Notify(player, "Your backpack is already max level.")
 		purchaseLocks[player] = nil
-		return
+		return false
+	end
+	if requestedTargetId ~= nil and requestedTargetId ~= itemConfig.ModelName then
+		purchaseLocks[player] = nil
+		return false
 	end
 
 	if not self.EconomyService:TrySpend(player, itemConfig.Price) then
@@ -273,9 +286,11 @@ function ProductService:_purchaseBagUpgrade(player, product)
 			player,
 			string.format("Not enough Coins. You need %s.", CoinFormat.Compact(itemConfig.Price))
 		)
-		self.DeveloperProductService:PromptBagLevelPurchase(player, nextLevel)
+		if promptRobuxOnShortage ~= false then
+			self.DeveloperProductService:PromptBagLevelPurchase(player, nextLevel)
+		end
 		purchaseLocks[player] = nil
-		return
+		return false
 	end
 
 	state.PurchasedProducts[itemConfig.ModelName] = true
@@ -301,6 +316,40 @@ function ProductService:_purchaseBagUpgrade(player, product)
 	)
 	self.PlayerDataService:PushSnapshot(player)
 	purchaseLocks[player] = nil
+	return true
+end
+
+function ProductService:RequestBagPurchase(player, request)
+	if type(request) ~= "table" then
+		return false
+	end
+	local paymentKind = request.PaymentKind
+	local targetId = request.TargetId
+	if
+		(paymentKind ~= "Coins" and paymentKind ~= "Robux")
+		or type(targetId) ~= "string"
+		or #targetId == 0
+		or #targetId > 32
+	then
+		return false
+	end
+
+	if paymentKind == "Coins" then
+		return self:_purchaseBagUpgrade(
+			player,
+			ProductConfig.Products.BagProduct_01,
+			targetId,
+			false
+		)
+	end
+
+	for level = BagConfig.DefaultLevel + 2, BagConfig.MaxLevel do
+		local config = BagConfig.Levels[level]
+		if config and config.ModelName == targetId then
+			return self.DeveloperProductService:PromptBagLevelPurchase(player, level)
+		end
+	end
+	return false
 end
 
 return ProductService

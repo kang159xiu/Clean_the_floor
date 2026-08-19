@@ -7,19 +7,6 @@ local RebirthService = {}
 
 local rebirthLocks = {}
 
-local function areRequiredAreasCompleted(state)
-	local areas = state and state.YardProgress and state.YardProgress.Areas or {}
-	local requiredAreaCount = RebirthConfig.GetRequiredAreaCount(state and state.UnlockedAreas)
-	for areaNumber = 1, requiredAreaCount do
-		local areaId = string.format("Area_%02d", areaNumber)
-		local progress = areas[areaId]
-		if (tonumber(type(progress) == "table" and progress.ClearedRatio) or 0) < 1 then
-			return false
-		end
-	end
-	return true
-end
-
 local function formatMultiplier(value)
 	local normalized = math.max(0, tonumber(value) or 0)
 	local rounded = math.floor(normalized + 0.5)
@@ -32,7 +19,7 @@ end
 function RebirthService:CanRebirth(player)
 	local state = self.PlayerDataService:GetState(player)
 	if not state then
-		return false, false, false, 0, RebirthConfig.GetRainbowPoopRequiredCount(0)
+		return false, false, false, 0, RebirthConfig.GetRainbowPoopRequiredCount(0), 0, RebirthConfig.GetRequiredCoins(0)
 	end
 	local requiredCount = RebirthConfig.GetRainbowPoopRequiredCount(state.RebirthCount)
 	local foundCount = math.min(
@@ -40,15 +27,22 @@ function RebirthService:CanRebirth(player)
 		requiredCount
 	)
 	local rainbowPoopCompleted = foundCount >= requiredCount
-	local homeCompleted = areRequiredAreasCompleted(state)
-	return rainbowPoopCompleted or homeCompleted, rainbowPoopCompleted, homeCompleted, foundCount, requiredCount
+	local currentCoins = math.max(0, tonumber(state.Coins) or 0)
+	local requiredCoins = RebirthConfig.GetRequiredCoins(state.RebirthCount)
+	local moneyCompleted = currentCoins >= requiredCoins
+	return moneyCompleted or rainbowPoopCompleted,
+		rainbowPoopCompleted,
+		moneyCompleted,
+		foundCount,
+		requiredCount,
+		currentCoins,
+		requiredCoins
 end
 
 function RebirthService:GetRequirementMessage(player)
-	local _, _, _, foundCount, requiredCount = self:CanRebirth(player)
-	local state = self.PlayerDataService:GetState(player)
+	local _, _, _, foundCount, requiredCount, _, requiredCoins = self:CanRebirth(player)
 	return RebirthConfig.GetRequirementText(
-		state and state.UnlockedAreas,
+		requiredCoins,
 		foundCount,
 		requiredCount
 	)
@@ -95,14 +89,6 @@ function RebirthService:_tryRebirth(player, notifyFailure, skipRebirthPurchaseId
 	local receiptCheckpointSaved = not purchasedSkip
 
 	local operationSucceeded, operationError = xpcall(function()
-		if not self.YardService:IsOwner(player) then
-			local returnedHome, returnMessage = self.YardService:ReturnHome(player)
-			if not returnedHome then
-				requestMessage = returnMessage or "Unable to return to your yard right now."
-				return
-			end
-		end
-
 		self.ToolActionService:StopPlayer(player)
 		self.LeafService:SetPickupActive(player, false)
 
@@ -195,7 +181,6 @@ end
 
 function RebirthService:Init(
 	playerDataService,
-	yardService,
 	leafService,
 	lostItemService,
 	tutorialService,
@@ -203,7 +188,6 @@ function RebirthService:Init(
 	poopService
 )
 	self.PlayerDataService = playerDataService
-	self.YardService = yardService
 	self.LeafService = leafService
 	self.LostItemService = lostItemService
 	self.TutorialService = tutorialService

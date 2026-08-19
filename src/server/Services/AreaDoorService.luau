@@ -18,7 +18,8 @@ function AreaDoorService:Init(
 	leafService,
 	metricsService,
 	economyService,
-	coinSpendRemote
+	coinSpendRemote,
+	coinShortageRemote
 )
 	self.PlayerDataService = playerDataService
 	self.RequestRemote = requestRemote
@@ -26,7 +27,9 @@ function AreaDoorService:Init(
 	self.MetricsService = metricsService
 	self.EconomyService = economyService
 	self.CoinSpendRemote = coinSpendRemote
+	self.CoinShortageRemote = coinShortageRemote
 	assert(coinSpendRemote:IsA("RemoteEvent"), "CoinSpendEvent must be a RemoteEvent")
+	assert(coinShortageRemote:IsA("RemoteEvent"), "AreaDoorCoinShortageNotice must be a RemoteEvent")
 
 	for _, areaId in RegionConfig.Order do
 		local area = Workspace:FindFirstChild(areaId)
@@ -91,7 +94,6 @@ function AreaDoorService:_processUnlock(player, config)
 		self.PlayerDataService:Notify(player, "Unlock the previous area first.")
 		return
 	end
-
 	if not AreaUnlockConfig.IsClearRequirementMet(config, state.YardProgress and state.YardProgress.Areas) then
 		self.PlayerDataService:Notify(
 			player,
@@ -104,8 +106,19 @@ function AreaDoorService:_processUnlock(player, config)
 	if not self.EconomyService:TrySpend(player, unlockPrice) then
 		self.PlayerDataService:Notify(
 			player,
-			string.format("Not enough Coins. You need %s.", CoinFormat.Compact(unlockPrice))
+			string.format("You need %s Coins.", CoinFormat.Compact(unlockPrice))
 		)
+		if self.LeafService:AreAllUnlockedAreasCleared(player) then
+			local resetStatus = self.LeafService:GetAreaCoinResetStatus(player)
+			self.CoinShortageRemote:FireClient(player, {
+				TargetAreaId = targetAreaId,
+				CurrentCoins = math.max(0, math.floor(tonumber(state.Coins) or 0)),
+				RequiredCoins = unlockPrice,
+				AreaCoinResetEligible = resetStatus.Eligible == true,
+				AreaCoinResetStatus = resetStatus.Status,
+				AreaCoinResetRequirementText = resetStatus.RequirementText,
+			})
+		end
 		return
 	end
 

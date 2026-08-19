@@ -7,7 +7,6 @@ local TweenService = game:GetService("TweenService")
 local Workspace = game:GetService("Workspace")
 
 local effectsFolder = script.Parent.Parent:WaitForChild("Effects")
-local CenterFlyUIEffect = require(effectsFolder:WaitForChild("CenterFlyUIEffect"))
 local ModalPanelCoordinator = require(effectsFolder:WaitForChild("ModalPanelCoordinator"))
 local ModalPanelEffects = require(effectsFolder:WaitForChild("ModalPanelEffects"))
 local CoinFormat = require(ReplicatedStorage.Shared.CoinFormat)
@@ -32,7 +31,6 @@ local BAG_FULL_SHAKE_ANGLES = { -7, 7, -5, 5 }
 local RECYCLE_SOUND_CLEANUP_TIMEOUT = 10
 local PURCHASE_SOUND_CLEANUP_TIMEOUT = 10
 local AREA_COMPLETION_FALLBACK_IMAGE = "rbxassetid://87612010732805"
-local LEAF_HINT_FALLBACK_IMAGE = "rbxassetid://106760602256692"
 local AREA_COMPLETION_HOLD_DURATION = 3
 local COIN_GAIN_PULSE_SCALE = 1.15
 local COIN_GAIN_PULSE_HALF_DURATION = 0.04
@@ -48,8 +46,6 @@ local CENTER_REWARD_HOLD_DURATION = 1
 local COIN_FLIP_LOSS_RISE_DURATION = 1
 local COIN_FLIP_LOSS_FADE_DELAY = 0.2
 local COIN_FLIP_LOSS_RISE_OFFSET = UDim2.fromScale(0, -0.14)
-local MAXIMUM_OUTSTANDING_LEAF_HINTS = 30
-local LEAF_HINT_SPAWN_INTERVAL = 0.04
 
 local function getPrimaryAreaLeafImage(areaId)
 	local areaPool = LeafConfig.AreaPools[areaId]
@@ -58,26 +54,6 @@ local function getPrimaryAreaLeafImage(areaId)
 	local leafTypeConfig = type(leafType) == "string" and LeafConfig.Types[leafType] or nil
 	local image = type(leafTypeConfig) == "table" and leafTypeConfig.Image or nil
 	return type(image) == "string" and image ~= "" and image or nil
-end
-
-local function isPositiveFiniteNumber(value)
-	return type(value) == "number"
-		and value == value
-		and value > 0
-		and value < math.huge
-end
-
-local function formatLeafHintValue(value)
-	local numericValue = math.max(0, tonumber(value) or 0)
-	if numericValue >= 1000 then
-		return "+" .. CoinFormat.Compact(numericValue)
-	end
-	local roundedValue = math.floor(numericValue * 10 + 0.5) / 10
-	local integerValue = math.floor(roundedValue + 0.5)
-	if math.abs(roundedValue - integerValue) < 1e-9 then
-		return "+" .. tostring(integerValue)
-	end
-	return "+" .. string.format("%.1f", roundedValue)
 end
 
 local function formatMultiplier(value)
@@ -101,13 +77,13 @@ local function findOptionalTextLabel(parent, displayName, labelName)
 	local label = display and display:FindFirstChild(labelName)
 	if label == nil then
 		warn(string.format("GameHUD.%s.%s is missing; multiplier display will be skipped.", displayName, labelName))
-		return nil
+		return display, nil
 	end
 	if not (label:IsA("TextLabel") or label:IsA("TextButton") or label:IsA("TextBox")) then
 		warn(string.format("GameHUD.%s.%s must be a text GUI object; multiplier display will be skipped.", displayName, labelName))
-		return nil
+		return display, nil
 	end
-	return label
+	return display, label
 end
 local CENTER_REWARD_FLY_DURATION = 0.5
 local CENTER_REWARD_Z_INDEX_OFFSET = 30
@@ -194,12 +170,12 @@ function HUDController:Init(remotes)
 	self.TimedLuckyBoxSnapshotReceived = false
 	self.TimedLuckyBoxLastDisplayedText = nil
 	self.TimedLuckyBoxRefreshElapsed = 0
-	self.UpgradeMultiplierLabel = findOptionalTextLabel(
+	self.UpgradeMultiplierDisplay, self.UpgradeMultiplierLabel = findOptionalTextLabel(
 		gameHUD,
 		"TrailMultiplierDisplay",
 		"TrailMultiplierLabel"
 	)
-	self.RebirthMultiplierLabel = findOptionalTextLabel(
+	self.RebirthMultiplierDisplay, self.RebirthMultiplierLabel = findOptionalTextLabel(
 		gameHUD,
 		"RebirthMultiplierDisplay",
 		"RebirthMultiplierLabel"
@@ -371,13 +347,13 @@ function HUDController:Init(remotes)
 	self.NotificationFadeEntries = nil
 	self.NotificationSerial = 0
 	self.NotificationPersistentMessage = nil
+	self.NotificationPersistentSources = {}
+	self.NotificationPersistentSourceSerial = 0
 	self.NotificationTransientActive = false
 	self.NotificationPriorityActive = false
 	self.ExitSaveNotificationSerial = nil
 	self.NotificationFrame.Visible = false
 	self.HUDRoot.ClipsDescendants = false
-	self.LeafHintTemplate = nil
-	self.LeafHintDefaultImage = LEAF_HINT_FALLBACK_IMAGE
 
 	self.LeafSoundTemplates = {}
 	self.NextLeafSoundIndex = 1
@@ -403,13 +379,6 @@ function HUDController:Init(remotes)
 	self.LastPurchaseBagExpansionLevel = nil
 	self.LastPurchaseUnlockedTools = nil
 	self.CurrentLeafValueMultiplier = 1
-	self.OutstandingLeafHintCount = 0
-	self.LeafHintRandom = Random.new()
-	self.ScheduledLeafHints = {}
-	self.ScheduledLeafHintHead = 1
-	self.ScheduledLeafHintTail = 0
-	self.LeafHintPacingConnection = nil
-	self.LastLeafHintSpawnAt = -math.huge
 	self.LatestSnapshot = nil
 	self.OptionalPresentationWarnings = {}
 	self:_tryBindOptionalPresentation()
@@ -467,9 +436,6 @@ function HUDController:Init(remotes)
 	remotes.Notification.OnClientEvent:Connect(function(message, holdDuration, priority)
 		self:ShowNotification(message, holdDuration, priority)
 	end)
-	remotes.LeafCollected.OnClientEvent:Connect(function(addedAmount, leafType, _, leafHints)
-		self:_showLeafCollectedHints(addedAmount, leafType, leafHints)
-	end)
 	remotes.LeafPickupBatch.OnClientEvent:Connect(function(_, _, collectedCount)
 		self:_playLeafPickupSound(collectedCount)
 	end)
@@ -509,6 +475,7 @@ function HUDController:_bindAdminResetIfAvailable()
 		self.ResetDataRequestRunning = true
 		button.Active = false
 		button.Interactable = false
+		local characterBeforeReset = Players.LocalPlayer.Character
 		local invokeSucceeded, success, message = pcall(function()
 			return self.Remotes.ResetPlayerData:InvokeServer()
 		end)
@@ -517,7 +484,7 @@ function HUDController:_bindAdminResetIfAvailable()
 			message = "Reset request failed. Try again."
 		end
 		if success then
-			self.SessionResetSucceeded:Fire()
+			self.SessionResetSucceeded:Fire(characterBeforeReset)
 			label.Text = "Reset"
 			table.clear(self.CompletedAreaNoticeKeys)
 			table.clear(self.AreaProgressByNoticeKey)
@@ -692,26 +659,11 @@ function HUDController:_bindCodexIfAvailable()
 	end)
 end
 
-function HUDController:_bindLeafHintIfAvailable()
-	if self.LeafHintTemplate then
-		return
-	end
+function HUDController:_hideLegacyLeafHintIfAvailable()
 	local template = self.HUDRoot:FindFirstChild("GetHint")
-	local textLabel = template and template:FindFirstChild("TextLabel")
-	local icon = template and template:FindFirstChild("Icon")
-	if
-		not template
-		or not template:IsA("GuiObject")
-		or not textLabel
-		or not textLabel:IsA("TextLabel")
-		or not icon
-		or not icon:IsA("ImageLabel")
-	then
-		return
+	if template and template:IsA("GuiObject") then
+		template.Visible = false
 	end
-	self.LeafHintTemplate = template
-	self.LeafHintDefaultImage = if icon.Image ~= "" then icon.Image else LEAF_HINT_FALLBACK_IMAGE
-	template.Visible = false
 end
 
 function HUDController:_updateTimedLuckyBoxCountdown()
@@ -816,7 +768,7 @@ function HUDController:_tryBindOptionalPresentation()
 		{ Name = "CoinFlipLoss", Callback = function() self:_bindCoinFlipLossIfAvailable() end },
 		{ Name = "LostItemProgress", Callback = function() self:_bindLostItemProgressIfAvailable() end },
 		{ Name = "Codex", Callback = function() self:_bindCodexIfAvailable() end },
-		{ Name = "LeafHint", Callback = function() self:_bindLeafHintIfAvailable() end },
+		{ Name = "LegacyLeafHint", Callback = function() self:_hideLegacyLeafHintIfAvailable() end },
 		{ Name = "TimedLuckyBoxCountdown", Callback = function() self:_bindTimedLuckyBoxCountdownIfAvailable() end },
 		{ Name = "Sounds", Callback = function() self:_bindOptionalSounds() end },
 	}
@@ -837,6 +789,12 @@ function HUDController:ConnectSessionResetSucceeded(callback)
 end
 
 function HUDController:_updateValueMultiplierLabels()
+	local showPersonalMultiplier = self.CurrentPersonalLeafValueMultiplier > 1
+	if self.UpgradeMultiplierDisplay and self.UpgradeMultiplierDisplay:IsA("GuiObject") then
+		self.UpgradeMultiplierDisplay.Visible = showPersonalMultiplier
+	elseif self.UpgradeMultiplierLabel then
+		self.UpgradeMultiplierLabel.Visible = showPersonalMultiplier
+	end
 	if self.UpgradeMultiplierLabel then
 		self.UpgradeMultiplierLabel.Text = string.format(
 			"Multiplier x%s (Upgrade)",
@@ -1300,6 +1258,10 @@ function HUDController:_playCoinFeedbackSound(soundKind)
 	task.delay(RECYCLE_SOUND_CLEANUP_TIMEOUT, function()
 		self:_releaseCoinFeedbackSound(sound, soundKind, playbackSerial)
 	end)
+end
+
+function HUDController:PlayRecycleFeedbackSound()
+	self:_playCoinFeedbackSound("Recycle")
 end
 
 function HUDController:_startCoinFeedbackSoundWorker()
@@ -2519,209 +2481,6 @@ function HUDController:_playCoinsIncrease(targetCoins)
 	end)
 end
 
-function HUDController:ShowLeafCollected(displayValue, leafType)
-	local slotReleased = false
-	local function releaseSlot()
-		if slotReleased then
-			return
-		end
-		slotReleased = true
-		self.OutstandingLeafHintCount = math.max(0, self.OutstandingLeafHintCount - 1)
-	end
-	if not isPositiveFiniteNumber(displayValue) then
-		releaseSlot()
-		return false
-	end
-	if not self.LeafHintTemplate or not self.HUDRoot or not self.BagTarget then
-		releaseSlot()
-		return false
-	end
-	local leafTypeConfig = if type(leafType) == "string" then LeafConfig.Types[leafType] else nil
-	local configuredImage = leafTypeConfig and leafTypeConfig.Image
-	local leafImage = if type(configuredImage) == "string" and configuredImage ~= ""
-		then configuredImage
-		else self.LeafHintDefaultImage
-
-	local started, startError = pcall(function()
-		CenterFlyUIEffect.Play({
-			Template = self.LeafHintTemplate,
-			Parent = self.HUDRoot,
-			Target = self.BagTarget,
-			TextObjectName = "TextLabel",
-			Text = formatLeafHintValue(displayValue),
-			ImageObjectName = "Icon",
-			Image = leafImage,
-			CloneName = "LeafGainHint",
-			UsePool = true,
-			PositionDistribution = "OuterWeightedEllipse",
-			OuterAreaScale = Vector2.new(0.9, 0.8),
-			CenterChance = 0.15,
-			InnerRadiusRatio = 0.3,
-			EdgePadding = 24,
-			AppearTime = 0.1,
-			StartScale = 0.6,
-			AppearEasingStyle = Enum.EasingStyle.Quad,
-			AppearEasingDirection = Enum.EasingDirection.Out,
-			HoldTime = 0.2,
-			FlyTime = 1,
-			FlyEndScale = 0.2,
-			EasingStyle = Enum.EasingStyle.Quad,
-			EasingDirection = Enum.EasingDirection.In,
-			MinimumZIndex = 20,
-			OnFinished = releaseSlot,
-		})
-	end)
-	if not started then
-		releaseSlot()
-		error(startError)
-	end
-	return true
-end
-
-function HUDController:_normalizeLeafHint(leafType, bagAmount, displayValue)
-	if not isPositiveFiniteNumber(bagAmount) then
-		return nil
-	end
-	if not isPositiveFiniteNumber(displayValue) then
-		displayValue = bagAmount * self.CurrentLeafValueMultiplier
-	end
-	if not isPositiveFiniteNumber(displayValue) then
-		return nil
-	end
-	return {
-		LeafType = leafType,
-		DisplayValue = displayValue,
-	}
-end
-
-function HUDController:_popScheduledLeafHint()
-	if self.ScheduledLeafHintHead > self.ScheduledLeafHintTail then
-		return nil
-	end
-	local leafHint = self.ScheduledLeafHints[self.ScheduledLeafHintHead]
-	self.ScheduledLeafHints[self.ScheduledLeafHintHead] = nil
-	self.ScheduledLeafHintHead += 1
-	if self.ScheduledLeafHintHead > self.ScheduledLeafHintTail then
-		table.clear(self.ScheduledLeafHints)
-		self.ScheduledLeafHintHead = 1
-		self.ScheduledLeafHintTail = 0
-	end
-	return leafHint
-end
-
-function HUDController:_hasScheduledLeafHints()
-	return self.ScheduledLeafHintHead <= self.ScheduledLeafHintTail
-end
-
-function HUDController:_playNextScheduledLeafHint()
-	local leafHint = self:_popScheduledLeafHint()
-	if not leafHint then
-		return false
-	end
-	local succeeded, message = pcall(function()
-		self:ShowLeafCollected(leafHint.DisplayValue, leafHint.LeafType)
-	end)
-	if not succeeded then
-		warn("Leaf hint playback failed: " .. tostring(message))
-	end
-	self.LastLeafHintSpawnAt = os.clock()
-	return true
-end
-
-function HUDController:_stopLeafHintPacing()
-	if self.LeafHintPacingConnection then
-		self.LeafHintPacingConnection:Disconnect()
-		self.LeafHintPacingConnection = nil
-	end
-end
-
-function HUDController:_startLeafHintPacing()
-	if self.LeafHintPacingConnection or not self:_hasScheduledLeafHints() then
-		return
-	end
-
-	local now = os.clock()
-	if now - self.LastLeafHintSpawnAt >= LEAF_HINT_SPAWN_INTERVAL then
-		self:_playNextScheduledLeafHint()
-		if not self:_hasScheduledLeafHints() then
-			return
-		end
-	end
-
-	self.LeafHintPacingConnection = RunService.Heartbeat:Connect(function()
-		if not self:_hasScheduledLeafHints() then
-			self:_stopLeafHintPacing()
-			return
-		end
-		local heartbeatNow = os.clock()
-		if heartbeatNow - self.LastLeafHintSpawnAt < LEAF_HINT_SPAWN_INTERVAL then
-			return
-		end
-		-- Deliberately play at most one hint per Heartbeat. Low frame rates must not
-		-- catch up by creating several hints together and recreate the old wave effect.
-		self:_playNextScheduledLeafHint()
-		if not self:_hasScheduledLeafHints() then
-			self:_stopLeafHintPacing()
-		end
-	end)
-end
-
-function HUDController:_scheduleLeafHints(leafHints)
-	local leafHintCount = #leafHints
-	local availableSlots = math.max(0, MAXIMUM_OUTSTANDING_LEAF_HINTS - self.OutstandingLeafHintCount)
-	local acceptedCount = math.min(leafHintCount, availableSlots)
-	if acceptedCount <= 0 then
-		return false
-	end
-
-	-- Randomly sample visual hints when the authoritative collection contains more
-	-- leaves than the remaining visual slots. Excess hints are discarded, not merged
-	-- or replayed later; gameplay rewards and bag state have already been awarded.
-	for index = 1, acceptedCount do
-		local selectedIndex = self.LeafHintRandom:NextInteger(index, leafHintCount)
-		leafHints[index], leafHints[selectedIndex] = leafHints[selectedIndex], leafHints[index]
-		self.ScheduledLeafHintTail += 1
-		self.ScheduledLeafHints[self.ScheduledLeafHintTail] = leafHints[index]
-	end
-	self.OutstandingLeafHintCount += acceptedCount
-	self:_startLeafHintPacing()
-	return true
-end
-
-function HUDController:_showLeafCollectedHints(addedAmount, leafType, leafHints)
-	local validLeafHints = {}
-	if type(leafHints) == "table" then
-		for _, leafHint in leafHints do
-			if type(leafHint) == "table" then
-				local normalizedLeafHint = self:_normalizeLeafHint(
-					leafHint.LeafType,
-					leafHint.BagAmount,
-					leafHint.DisplayValue
-				)
-				if normalizedLeafHint then
-					table.insert(validLeafHints, normalizedLeafHint)
-				end
-			end
-		end
-	end
-	if #validLeafHints > 0 then
-		self:_scheduleLeafHints(validLeafHints)
-		return
-	end
-
-	local legacyAmount = tonumber(addedAmount)
-	if isPositiveFiniteNumber(legacyAmount) then
-		local normalizedLeafHint = self:_normalizeLeafHint(
-			leafType,
-			legacyAmount,
-			legacyAmount * self.CurrentLeafValueMultiplier
-		)
-		if normalizedLeafHint then
-			self:_scheduleLeafHints({ normalizedLeafHint })
-		end
-	end
-end
-
 function HUDController:_cancelNotificationFade()
 	if self.NotificationFadeTweens then
 		for _, tween in self.NotificationFadeTweens do
@@ -2749,20 +2508,49 @@ function HUDController:_hideNotificationVisual()
 	self.NotificationFrame.Visible = false
 end
 
-function HUDController:SetPersistentNotification(message)
-	local normalizedMessage = if type(message) == "string" and message ~= "" then message else nil
-	self.NotificationPersistentMessage = normalizedMessage
+function HUDController:_refreshPersistentNotification()
+	local selectedSource = nil
+	for _, source in self.NotificationPersistentSources do
+		if
+			not selectedSource
+			or source.Priority > selectedSource.Priority
+			or source.Priority == selectedSource.Priority and source.Serial > selectedSource.Serial
+		then
+			selectedSource = source
+		end
+	end
+	self.NotificationPersistentMessage = selectedSource and selectedSource.Message or nil
 	if self.NotificationTransientActive then
 		return
 	end
 
 	self.NotificationSerial += 1
 	self:_cancelNotificationFade()
-	if normalizedMessage then
-		self:_showNotificationVisual(normalizedMessage)
+	if self.NotificationPersistentMessage then
+		self:_showNotificationVisual(self.NotificationPersistentMessage)
 	else
 		self:_hideNotificationVisual()
 	end
+end
+
+function HUDController:SetPersistentNotificationSource(sourceId, message, priority)
+	assert(type(sourceId) == "string" and sourceId ~= "", "Persistent notification source is required")
+	local normalizedMessage = if type(message) == "string" and message ~= "" then message else nil
+	if normalizedMessage then
+		self.NotificationPersistentSourceSerial += 1
+		self.NotificationPersistentSources[sourceId] = {
+			Message = normalizedMessage,
+			Priority = tonumber(priority) or 0,
+			Serial = self.NotificationPersistentSourceSerial,
+		}
+	else
+		self.NotificationPersistentSources[sourceId] = nil
+	end
+	self:_refreshPersistentNotification()
+end
+
+function HUDController:SetPersistentNotification(message)
+	self:SetPersistentNotificationSource("Tutorial", message, 100)
 end
 
 function HUDController:ShowExitSaveNotification(message)

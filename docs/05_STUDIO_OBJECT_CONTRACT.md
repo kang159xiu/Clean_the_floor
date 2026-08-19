@@ -81,14 +81,15 @@ Workspace
 - `StarterGui.GameHUD.coinFlip.jian/jia/NO/yes [GuiButton]`运行时各使用独立`CoinFlipPressScale [UIScale]`提供一次性按压回弹；`jian/jia`单击一次调整10金币，长按按每0.01秒±10的真实时间速率连续调整且只在最初按下时播放按钮脉冲。低帧率下同帧到期档位合并为一次文字刷新；`coinFlip.Frame.TextLabel`的`CoinFlipWagerWaveScale [UIScale]`只为单次调整播放追数与回弹，长按不会排队动画。展示硬币只在下注跨越1k/10k/100k档位时重建。
 - `StarterGui.GameHUD.HUDRoot.coinsX [GuiObject]`是抛硬币反面时的扣款提示模板；其直属`Notification [TextLabel]`由客户端写为`-赌金`。运行时整个`coinsX`向上漂浮并逐渐淡出，Studio中应保持默认隐藏。
 - Workspace必须启用`StreamingEnabled`，并设置`StreamingMinRadius=64`、`StreamingTargetRadius=160`；这些值与`LeafVisibilityConfig`保持一致。
+- `Workspace.ClientPerformanceTierOverride [可选string属性]`只用于Studio Play确定性测试，可设为`Low`、`Medium`或`High`并在运行中切换；属性缺失或值非法时使用真实FPS采样，正式发布客户端始终忽略该属性。
 - `ReplicatedStorage.miaobian.Highlight02`必须是`Highlight`，作为每个正式区域剩余最后100片时的收尾描边模板。客户端最多克隆5份，只设置名称、`Adornee`、`Enabled`和父级；模板当前橙色填充、白色外框及`AlwaysOnTop`样式由Studio维护。
 - `ReplicatedStorage.miaobian.Highlight03`必须是`Highlight`，作为幸运盒原地轮播期间随机模型的只读描边模板。客户端每轮克隆一份，只设置名称、`Adornee`和父级；`Adornee`必须是当前轮播模型内部的视觉`Model`，不能包含隐藏`upgrade`。轮播模型销毁时描边一并销毁，最终真实模型不使用该模板。
 - Area和`大厅装扮.ground`的全部后代BasePart都是各自的生成与工具射线表面；服务启动时设置`Anchored=true`、`CanQuery=true`。位于`大厅装扮`下但不在`ground` Model内部的同名Part不参与Lobby生成。
 - Lobby使用600个全服共享稳定池位，从Leaf1～16等概率选择外观、基础背包价值固定为1，并按每0.1秒一个空位激活。Lobby描述随当前庭院快照一同下发，客户端模型只放入`大厅装扮.GeneratedLeaves`；拾取计入背包、出售和清理榜，但不写`YardProgress`、不解锁区域且不推进教程或幸运箱。
 - 每区运行时写入`AreaCleaned`属性。`GenerationComplete`表示当前生成批次是否结束；只有`GameplayReady=true`的完整区域可以被工具和描边处理，`PreviewOnly=true`的100片预览只负责远景显示。
-- 启动只完整生成基础450片的Area_01，并为Area_02生成100片预览。任一区域清完后，下一地区仍保持100片预览；只有角色身体碰门并通过服务端顺序、清理和金币扣款验证后才补齐正式数量，同时为再下一区域生成100片预览。更远区域不生成，当前Area_08没有后继区域；Area_09不得生成预览或正式叶子。
-- 普通失物不再以真实模型写入服务端`Area_XX.GeneratedLostItems`。个人地面箱克隆由客户端放在`Workspace.LocalLostItems`，原地揭晓克隆放在`Workspace.LocalLostItemReveals`；服务器仍保留最终ID、位置、拾取、RevealId和奖励权威。Area_01～08正式进度及每轮ResetCoin各自每收取200片进行一次独立5%判定，成功时在触发玩家周围4 studs内生成对应等级箱子；Lobby不参与。首次180秒及后续300秒定时Lucky004/005每次服务器会话重新计时，未打开箱、位置、检查点和未来计划不写DataStore。`GameHUD.HUDRoot.time.Value`必须是文字GUI对象，客户端只修改其`Text`并在节点缺失时安全关闭倒计时表现。地面快照只公开`LuckyTier`，不公开最终物品或价值。揭晓容器中的候选与最终模型按视觉Model包围盒中心对齐权威`RevealOriginCFrame`；12轮候选不得保留Billboard，最终0.25秒放大完成后挂接价值牌并展示0.5秒，再用0.65秒沿最高额外抬升1.5 studs的抛物线飞向开启者胸口，飞行全程保持完整尺寸。不同RevealId可并行动画和独立发奖；`GetDiamond`的首次获得提示只能在对应飞行结束且服务端确认入库后出现。
-- `Workspace.Function.Reset.ProximityPrompt`只在玩家自己的庭院执行免费钱币重置。全部已解锁区域都已清完且上一轮ResetCoin已收完时，为这些区域创建一轮独立会话钱币；门、`UnlockedAreas`、正式`YardProgress`、教程和首次通关保持不变。任一已解锁区域未清完时提示`Area N is not fully cleared. Reset unavailable.`，上一轮未收完时提示`Collect all reset coins before resetting again.`。
+- 启动只完整生成基础450片的Area_01，并为Area_02生成100片预览。角色身体碰门时，只有Area01到目标前一区的正式清理进度全部达到100%、顺序与金币扣款验证通过，目标区域才补齐正式数量，同时为再下一区域生成100片预览。全部已付费解锁区域都保持正式可收取状态；更远区域不生成，当前Area_08没有后继区域，Area_09不得生成预览或正式叶子。
+- 普通失物不再以真实模型写入服务端`Area_XX.GeneratedLostItems`。个人地面箱克隆由客户端放在`Workspace.LocalLostItems`，原地揭晓克隆放在`Workspace.LocalLostItemReveals`；服务器仍保留最终ID、位置、拾取、RevealId和奖励权威。Area_01～08正式进度及每轮ResetCoin各自每收取200片进行一次独立5%判定，成功时在触发玩家周围4 studs内生成对应等级箱子；Lobby不参与。首次120秒及后续300秒定时Lucky004/005每次服务器会话重新计时，未打开箱、位置、检查点和未来计划不写DataStore。`GameHUD.HUDRoot.time.Value`必须是文字GUI对象，客户端只修改其`Text`并在节点缺失时安全关闭倒计时表现。地面快照只公开`LuckyTier`，不公开最终物品或价值。揭晓容器中的候选与最终模型按视觉Model包围盒中心对齐权威`RevealOriginCFrame`；12轮候选不得保留Billboard，最终0.25秒放大完成后挂接价值牌并展示0.5秒，再用0.65秒沿最高额外抬升1.5 studs的抛物线飞向开启者胸口，飞行全程保持完整尺寸。不同RevealId可并行动画和独立发奖；`GetDiamond`的首次获得提示只能在对应飞行结束且服务端确认入库后出现。
+- `Workspace.Function.Reset [BasePart]`同时是门金币不足且可重置时的本地Beam目标；对象暂未Streaming到客户端时只隐藏并重试，不得阻断控制器。其直属`ProximityPrompt`只向触发玩家打开`GameHUD.Reset`并结束本轮前往Reset引导，不直接创建钱币或显示旧失败通知。玩家点击面板确认后，服务端再次检查仍在同一重置台附近、自己的庭院已就绪、全部已解锁区域清完且上一轮ResetCoin已收完，才为这些区域创建一轮独立会话钱币；门、`UnlockedAreas`、正式`YardProgress`、教程和首次通关保持不变。
 - 重生不再使用`Workspace.Function`中的世界Part或`ProximityPrompt`；玩家统一通过`GameHUD.Frame.Rebirth`打开确认面板。
 - `Function.Leaderboards.WinsBoard`、`PlaytimeBoard`、`gold`和`POOP`共用排行榜对象契约。每个`SurfaceGui.ScrollingFrame.RowTemplate.Frame`必须保留直属`Amount/Rank/UserName [TextLabel]`；原始外层`RowTemplate`由客户端保持隐藏，生成行必须克隆完整`RowTemplate`并只在克隆内部Frame写内容，不能把内部Frame直接改挂到ScrollingFrame，否则比例行高会相对整个滚动区域放大。`ScrollingFrame`必须保留直属`UIListLayout`；客户端运行时设置`AutomaticCanvasSize=Y`、清零初始`CanvasSize`并启用纵向滚动，Studio继续负责模板行高、布局间距和滚动条样式。
 - 四个榜的`SurfaceGui.Self.Frame`都必须保留同名三个TextLabel，由每个客户端只在本地写自己的数据。`WinsBoard`显示最快清扫时间，`PlaytimeBoard`显示永久在线时长，两者使用`00m/1h05m`格式；`gold`显示永久清理叶子数，`POOP`显示永久成功制造便便次数，两者使用紧凑整数。无成绩显示`#--`以及`00m`或`0`，榜外显示`#20+`。场景对象受Streaming影响时客户端不得阻塞启动，载入后使用各自最后一份只读快照补画。
@@ -101,12 +102,12 @@ Workspace
 
 ## 区域门
 
-- `DoorNN`表示目标区域N；Area_02～08必须按顺序解锁，清完Area_01到Area_(N-1)后再支付`AreaUnlockConfig`按当前Rebirth次数计算的金币门价。不存在Key或最低Rebirth次数替代路径。
+- `DoorNN`表示目标区域N；Area_02～08要求Area01到Area_(N-1)的正式清理进度全部达到100%、前一区域已解锁并按顺序支付金币，不存在Key或最低Rebirth次数替代路径。门价为基础价乘`1 + 0.5 × RebirthCount`并取整；普通或SKIP Rebirth后只保留Area_01，旧门重新锁定并按新的Rebirth次数再次购买，普通死亡与重新加入则保留本轮已购门。
 - 固定按钮路径为`DoorNN.Door01.SurfaceGui.Frame.ImageButton`，文字节点为其`TextLabel`；价格路径为`DoorNN.Door01.SurfaceGui.rebirth.ImageLabel.x1`。`rebirth`只是历史对象名，当前只承载金币图标和价格，不表示重生要求。
 - `ImageLabel.Image`使用与`HUDRoot.CoinsFrame.ImageLabel`相同的金币图片`rbxassetid://140381046419252`。客户端把`x1.Text`写为`x`加当前玩家真实紧凑门价，例如`x150/x1.8k`；Rebirth、快照或Streaming重载后必须刷新。同名目标门允许存在多个入口副本，当前Door03、Door04和Door07均有重复入口，所有副本必须显示同价且一次解锁后同步打开。
 - 每个`Door02～Door08`及其`MB01/MB02`保持`ModelStreamingMode=Atomic`。每个需要旋转的`MB01/MB02`模型必须直接设置number属性`angle`，表示门完全打开后的世界绝对Y角度（度）；运行时保留关闭姿态的位置与X/Z旋转，只将目标Y旋转设为`angle`，缺失属性时临时使用关闭Y角度`+90°`回退。
 - 锁定状态的`Door01.CanTouch`必须保持`true`；只有本地玩家身体碰撞会执行解锁请求，工具、Accessory、其他玩家和场景Part不会触发。`SurfaceGui.Frame.ImageButton`必须保留用于现有排版，但运行时始终不可点击。
-- 未解锁时显示`Unlock <Area DisplayName>`、当前金币门价，并恢复Studio外观与碰撞。余额不足、前置未清或访问别人庭院时服务端拒绝且不扣款。
+- 未解锁时显示`Unlock <Area DisplayName>`、当前金币门价，并恢复Studio外观与碰撞。前置正式区域未全部清完时提示`Clear all areas through <Previous Area> to unlock <Target Area>.`；余额不足或前一区域尚未解锁时同样由服务端拒绝且不扣款。
 - 当前玩家解锁后，所有区域中的同名DoorNN在该客户端设置`Door01.Transparency=1`、`CanCollide/CanTouch/CanQuery=false`并关闭整个`SurfaceGui`；`MB01/MB02`在0.6秒内打开。首次载入已经解锁的门直接同步最终打开姿态，不重播动画。
 - `Workspace.AirWall["N"]`对应`Area_0N`的玩家空气墙；客户端按当前活动庭院的`StateSnapshot.UnlockedAreas`独立控制容器内全部后代BasePart。区域已解锁时本地设置`CanCollide=false`，未解锁时恢复各Part最初载入时的Studio值，不会影响同服其他玩家。
 - 老存档进入时立即应用已解锁状态；游戏内Rebirth重置区域进度后恢复碰撞。普通角色死亡复活不重新锁墙。`AirWall`、编号容器或内部Part受Streaming后加载时必须按最后一份快照补应用。
@@ -168,6 +169,11 @@ ReplicatedStorage
 │  └─ MagneticRange [Model或Folder]
 │     └─ MagneticRange [BasePart]
 │        └─ Decal [Decal]
+├─ tishi [Part，世界钱币收取提示模板]
+│  └─ BillboardGui
+│     └─ GetHint [Frame]
+│        ├─ Icon [ImageLabel]
+│        └─ TextLabel [TextLabel，可包含UIStroke]
 ├─ PointTo [BasePart]
 │  ├─ Beam [Beam]
 │  ├─ Attachment0 [Attachment，玩家点位]
@@ -195,8 +201,8 @@ ReplicatedStorage
 │  ├─ Lucky001..Lucky005 [Model]
 │  │  └─ Base [BasePart]
 │  │     └─ ProximityPrompt [ActionText=OPEN, HoldDuration=0.5, MaxActivationDistance=10]
-├─ frend [Folder]
-│  └─ BillboardGui [BillboardGui，访客头顶牌模板]
+├─ frend [Folder，可选旧素材，运行时不使用]
+│  └─ BillboardGui [BillboardGui，可保留或删除]
 │     └─ Power
 │        ├─ Value [TextLabel]
 │        └─ ImageLabel [ImageLabel]
@@ -208,7 +214,7 @@ ReplicatedStorage
 ```
 
 - 普通失物视觉及价值牌只读取`ReplicatedStorage.LostItem`；地面箱只读取`ReplicatedStorage["Lucky Block"]`。`Workspace.LostItem`是独立装饰，可以自由移动、隐藏或删除，代码不得依赖；`Workspace.LocalLostItems`和`Workspace.LocalLostItemReveals`都只允许作为客户端运行时投影容器。
-- `frend.BillboardGui`保持只读；客户端克隆后将`Adornee`设为访客角色Head、启用Billboard、把`Power.Value`写为`Visitor: DisplayName`并把`Power.ImageLabel`写为头像。模板的尺寸、偏移、颜色和其他样式由Studio决定；运行时克隆只存在于同庭院成员各自的客户端。
+- `frend.BillboardGui`属于退休访客系统的可选旧素材；生产代码不读取、等待或克隆它，保留或删除都不能影响客户端启动。
 
 ### 叶子模板
 
@@ -217,6 +223,15 @@ ReplicatedStorage
 - 当前Leaf1～18的BagValue均为1，因此每片都占1格背包并提供1点基础金币。Area_01使用Leaf1/2、Area_02使用Leaf3/4，以此类推至Area_09使用Leaf17/18；每区前一种模型权重70，后一种权重30。
 - 叶子落点允许与其他叶子重叠，并沿当前ground表面法线随机抬高0.05～0.6 studs以显示叠放层次；但必须避开八区ground之外所有`CanQuery=true`的世界物体。模型的旋转包围盒最多检查12个随机位置，全部失败时才允许使用最后候选以保证数量。
 - 拾取后完整Model在0.35秒内沿弧线飞向玩家并缩小销毁。
+
+### 世界收取提示
+
+- `ReplicatedStorage.tishi`必须为透明`BasePart`，包含直属`BillboardGui.GetHint [Frame]`及其直属`Icon [ImageLabel]/TextLabel [TextLabel]`；大厅与Coop Place必须保留相同结构。
+- 客户端只在服务端确认钱币进入背包后克隆该模板到该片钱币最后的权威世界位置。克隆固定锚定并关闭碰撞、触碰、查询和阴影，只存在于收集者客户端。
+- `Icon`读取该钱币`LeafConfig`图片，缺失配置时保留`tishi`默认图片；`TextLabel`显示应用当前叶价倍率后的`+价值`，不包含兑换阶段的Double Coins。
+- 每个提示从出现时就开始漂浮，在总计1.4秒内向上移动3 studs；前0.6秒保持图片、文字和可选UIStroke完全可见，后0.8秒继续上升并同步淡出。逐片提示保持0.04秒节奏，排期与活动合计最多30个，超额直接省略；完成或失败后必须恢复透明度并进入客户端对象池。
+- Quick Sell及其他即时回收不克隆`tishi`，继续使用金币到账动画；缺失或无效模板只关闭该表现，不得阻断客户端Bootstrap或真实收取。
+- 普通区域门权威扣款成功后可由`AreaDoorController`另建最多30个本地`tishi`克隆；这些克隆强制使用`rbxassetid://99223157190429`并把`TextLabel`写为完整负门价。它们从玩家身边以0.2秒弧线和`alpha²`位移逐渐加速飞向实际碰撞门，仅作表现，不得扣款或写`UnlockedAreas`；Coop不运行该表现。
 
 ### 清洁工具模板
 
@@ -269,9 +284,10 @@ ReplicatedStorage
 ## 教程引导
 
 - 教程同样只读克隆`ReplicatedStorage.yindaoxian`，放入客户端`Workspace.LocalTutorialGuidanceEffects`，不得修改模板视觉属性。
+- 第1步先连接角色与Area_01最近的正式钱币位置；客户端只创建透明、无碰撞、不可查询的本地锚点，不修改钱币对象。水平距离进入6 studs前显示`Go to the coins`并隐藏`HUDRoot.yin`；进入后销毁该锚点并切换为拾取提示。目标消失、角色复活或Streaming未就绪时隐藏Beam并重新解析，不得选择Lobby钱币或ResetCoin。
 - 第2步连接角色与对应区域`Recycle_01`；数量升级和第二次成功卖出后达到升级价格的速度步骤连接角色与`Area_01.UPattribute.up`，但不会自动打开面板。玩家通过升级台或HUD入口主动打开后销毁Beam、切换到`Hands`页，并让对应`Pickup Amount`或`Pickup Speed`的`BuyButtons.Buy`循环放大缩小。
 - 教程完成后的首次背包提示在成功回收且结算后金币足够时复用同一教程Beam，优先连接当前区域`BagProduct_01`；目标未加载时只在已解锁区域中选择最近的已加载购买点。该提示不要求袋满，首次普通背包购买后永久结束；门引导激活时仍拥有更高优先级。
-- 首次普通背包购买后的便便教程继续只读复用`ReplicatedStorage.yindaoxian`。制造成功后Beam连接玩家与`Workspace.LocalPoops.LocalPoop_<SpawnId>.upgrade`，拾取后连接最近已解锁区域的`LostItemShop.upgrade`；门引导优先于便便教程，便便教程优先于普通失物兑换引导。
+- 首次普通背包购买后的便便教程继续只读复用`ReplicatedStorage.yindaoxian`。制造成功后Beam连接玩家与`Workspace.LocalPoops.LocalPoop_<SpawnId>.upgrade`，第一次及下一轮有效拾取后的兑换阶段连接最近已解锁区域的`LostItemShop.upgrade`，账号最多显示两轮兑换Beam；门引导优先于便便教程，便便教程优先于普通失物兑换引导。
 
 ## 丢失物兑换引导
 
@@ -281,18 +297,33 @@ ReplicatedStorage
 - 目标选择包含`大厅装扮.LostItemShop`和当前活动庭院`StateSnapshot.UnlockedAreas`中的已解锁区域。来源为`Lobby`时优先大厅商店；来源区域已解锁时优先该区域内离玩家最近的有效`upgrade`；来源处无已加载目标时，在大厅与其他已解锁区域中选择全局最近目标。没有已加载兑换点时隐藏Beam，Streaming载入或后续解锁后自动恢复。
 - 2026-08-03 Studio检查时Area_04没有`LostItemShop`，Area_05与Area_07各有两个同名`LostItemShop`；客户端选择规则兼容缺失和任意数量重复结构，代码不得自动创建、移动或删除用户场景对象。
 
+## 合作匹配与副本
+
+- 大厅PlaceId为`95556867008792`，合作副本PlaceId为`131244809352557`；两个Place使用同一`default.project.json`与`src`，场景对象分别保存在各自Place。
+- 大厅`Workspace.Function.place001`～`place004`必须都是玩家进入检测用BasePart。每个台的全服状态牌位于`join [BasePart].BillboardGui.Frame`：`04 [TextLabel]`显示`当前人数/目标人数`，空队为`0/4`；`easy [TextLabel]`显示`EASY/HARD/NIGHTMARE/HELL`，空队为`EASY`；`TextLabel [TextLabel]`只在房主确认后的15秒倒计时显示`Starting in %ds`，其他状态隐藏。四台结构必须一致，文字由服务端直接更新。Coop Place不要求复制这些大厅匹配台。
+- 每个台只允许运行时代码修改`底座.Group [Model]`内全部后代`Part`的`CanCollide`；当前Place可以有4个或8个Part，不得修改同名装饰`Group [MeshPart]`。服务端未满时保持开放、满员/保存/传送时关闭；已入队成员客户端始终在本地关闭当前台围墙，退出后解除。
+- `StarterGui.GameHUD.Team001`是大厅组队面板：人数减/加为`Frame.PLAYER.-/+`、人数值为`Frame.PLAYER.PLAY.4`、难度切换为`Frame.DIFFICULTY.</>`、难度值为`Frame.DIFFICULTY.EASY.EASY`、退出为`esc`、确认为`nodabian`、状态倒计时为`plain.Value`。
+- `StarterGui.GameHUD.Team0EXC [Frame]`是大厅队内等待条，直属`esc [ImageButton]`负责退出匹配。任何成员进入组队台并被服务端接纳后显示，离队后隐藏；房主确认后`Team001`隐藏而本条继续显示。退出由服务端将角色放到对应台`CFrame.LookVector`前方、检测范围与退出边距之外并朝向该台。
+- `StarterGui.GameHUD.Team`是副本结算面板：时间为`muban.TIME`、排行行为`muban.001`～`004`、保存并返回大厅为`nodabian`。编辑态`Team.Visible=false`；`Team001`虽然模板可见，客户端启动后必须先隐藏。
+- 合作副本必须保留`StarterGui.GameHUD.fanhui.Lobby/Return [TextButton]`和`GameHUD.fanhuidating [Frame]`；后者直属`Return/no [TextButton]`分别确认返回和取消。副本同时显示Lobby与Return，并让确认Frame默认隐藏；大厅只需显示Lobby并隐藏这些可选副本确认节点。
+- 副本运行时禁用场景中任何可选保留的匹配台`join`状态牌BillboardGui、`Workspace.Function.Reset`下Prompt和所有Area01～08门价`SurfaceGui.rebirth`；匹配台完全缺失也必须安全启动。Area09不参与合作局。
+
 ## StarterGui契约
 
 `StarterGui.GameHUD.Enabled`必须为`true`，否则整套HUD及其按钮不会显示或接收输入。各功能面板的初始显隐继续由对应客户端控制器负责。
 
 `ReplicatedStorage.Power`和`Workspace.Power`作为未使用素材保留，玩法代码不得读取、等待、克隆、修改或销毁其中对象。Tool03不再创建头顶电量牌或低电量提示；`StarterGui.GameHUD.HUDRoot.NotificationFrame00.Notification`承载袋满与便便教程提示，袋满始终优先。
 
-所有位于`Workspace`的`BillboardGui/SurfaceGui`以及`ReplicatedStorage`场景模板中同类GUI下的文字对象统一使用`Montserrat Bold Normal`字体；只调整`FontFace`，保留文字、颜色、描边、缩放、对齐、RichText和布局。`StarterGui`屏幕HUD不属于该规则；Roblox原生`ProximityPrompt`没有字体属性，继续使用平台默认样式。
+除保留自身设计字体的`ReplicatedStorage.tishi`外，所有位于`Workspace`的`BillboardGui/SurfaceGui`以及`ReplicatedStorage`场景模板中同类GUI下的文字对象统一使用`Montserrat Bold Normal`字体；只调整`FontFace`，保留文字、颜色、描边、缩放、对齐、RichText和布局。`StarterGui`屏幕HUD不属于该规则；Roblox原生`ProximityPrompt`没有字体属性，继续使用平台默认样式。
 
 ```text
 StarterGui.GameHUD
 ├─ fanhui
-│  └─ Lobby [TextButton，本Place返回出生点]
+│  ├─ Lobby [TextButton，当前Place返回出生点；大厅与Coop均显示]
+│  └─ Return [TextButton，合作副本打开返回确认]
+├─ fanhuidating [Frame，合作副本返回确认，默认隐藏]
+│  ├─ Return [TextButton，确认保存并跨Place返回大厅]
+│  └─ no [TextButton，取消并隐藏确认]
 ├─ TrailMultiplierDisplay
 │  └─ TrailMultiplierLabel [文本节点]
 ├─ RebirthMultiplierDisplay
@@ -321,7 +352,7 @@ StarterGui.GameHUD
 │  │     ├─ number [失物堆叠数量xN]
 │  │     ├─ UIStroke
 │  │     └─ UICorner
-│  ├─ GetHint [Frame，隐藏收取提示模板]
+│  ├─ GetHint [Frame，已停用的旧屏幕收取提示，保持隐藏]
 │  │  ├─ Icon [ImageLabel]
 │  │  └─ TextLabel
 │  ├─ yin
@@ -332,6 +363,10 @@ StarterGui.GameHUD
 │  ├─ Lossofprogress
 │  │  ├─ TextLabel
 │  │  └─ ScrollingFrame.ItemFrame
+│  ├─ Friendcollection [旧好友奖励领取入口]
+│  │  ├─ ImageButton [GuiButton]
+│  │  │  └─ number [TextLabel]
+│  │  └─ friend [TextLabel]
 │  └─ GetDiamond
 │     ├─ Icon
 │     ├─ Light
@@ -341,12 +376,18 @@ StarterGui.GameHUD
 │  └─ Notification
 ├─ Frame
 │  ├─ Codex
+│  ├─ invite [GuiButton，Roblox官方体验邀请]
 │  ├─ Upgrade [GuiButton，直接打开升级面板]
 │  ├─ Rebirth [GuiButton，进入游戏后始终显示]
 │  │  └─ tixin [ImageLabel，可重生提醒，模板默认隐藏]
 │  └─ QuickSell [GuiButton，Quick Sell通行证入口]
 ├─ chongshengqueren [GuiObject，重生确认界面]
-│  ├─ explain [TextLabel，客户端写入`Clear Areas 1-N or find X/Y`]
+│  ├─ monexplain [TextLabel，客户端写入`Money <金币要求>`]
+│  ├─ explain [TextLabel，客户端写入`find X/Y`]
+│  ├─ jindu
+│  │  ├─ Name [TextLabel，客户端写入`当前金币/金币要求`]
+│  │  └─ BarBackground
+│  │     └─ Fill [GuiObject，X比例为`clamp(当前金币/金币要求, 0, 1)`]
 │  ├─ closes [GuiButton，关闭界面]
 │  ├─ Header.number [TextLabel，当前RebirthCount纯数字]
 │  ├─ Buttons
@@ -359,15 +400,26 @@ StarterGui.GameHUD
 │  ├─ X2 [TextLabel，格式`数值x Cash`]
 │  ├─ numX1 [TextLabel，格式`数值X Quantity`]
 │  └─ numX2 [TextLabel，格式`数值X Quantity`]
-├─ invite [GuiObject，庭院列表]
+├─ Reset [Frame，区域钱币重置确认界面，Studio默认隐藏]
+│  ├─ muban
+│  │  └─ explain [TextLabel，客户端写入权威条件或失败原因]
+│  ├─ nodabian [ImageButton，确认按钮]
+│  │  ├─ allowed [TextLabel，运行时固定显示Reset]
+│  │  └─ Stud
+│  │     ├─ UIGradient [可重置状态]
+│  │     └─ UIGradient2 [不可重置状态]
+│  └─ Banner
+│     └─ Close [TextButton，关闭界面]
+├─ invite [GuiObject，可选退休庭院列表，运行时不使用]
 │  ├─ GoHome [GuiButton]
 │  ├─ nodabian [GuiButton]
 │  │  └─ allowed [TextLabel，Allowed/Blocked]
 │  └─ List.muban [隐藏玩家行模板]
 │     ├─ name [TextLabel，玩家DisplayName]
 │     ├─ Image.Icon2 [ImageLabel，玩家HeadShot头像]
-│     ├─ invite [GuiButton，发送庭院邀请]
-│     └─ visit yard [GuiButton，直接进入庭院]
+│     ├─ invite [GuiButton，退休对象，运行时不使用]
+│     └─ visit yard [GuiButton，退休对象，运行时不使用]
+├─ accept [GuiObject，可选退休接受弹窗，运行时不使用]
 ├─ Codex
 │  ├─ Banner.Close
 │  └─ ListHolder.AchievementsList.List.Template [隐藏模板]
@@ -396,24 +448,26 @@ StarterGui.GameHUD
       └─ UPpeople.cuifnegji.List
 ```
 
-- `Frame.Rebirth`、`Frame.QuickSell`和`chongshengqueren`的Studio位置与尺寸均由现有布局决定。重生入口和SKIP运行时始终显示；`Frame.Rebirth.tixin`必须为默认隐藏的`ImageLabel`，客户端只按资格与面板状态控制其可见性，不缩放`tixin`本身。资格成立且面板关闭时，客户端在`Frame.Rebirth`直属`UIScale`上组合1.12倍资格脉冲和1.08倍悬停缩放；打开面板、请求重生或成功重生时恢复原尺寸。模板默认文字为`1x Cash/2.5x Cash/1X Quantity/1.5X Quantity`及`Header.number=0`，默认只启用`Owned/Locked`渐变。客户端只修改可见性、交互状态、倍率/次数文字、入口缩放和两条渐变的`Enabled`，不移动按钮。
+- `Frame.Rebirth`、`Frame.QuickSell`和`chongshengqueren`的Studio位置与尺寸均由现有布局决定。重生入口和SKIP运行时始终显示；`Frame.Rebirth.tixin`必须为默认隐藏的`ImageLabel`，客户端只按资格与面板状态控制其可见性，不缩放`tixin`本身。资格成立且面板关闭时，客户端在`Frame.Rebirth`直属`UIScale`上组合1.12倍资格脉冲和1.08倍悬停缩放；打开面板、请求重生或成功重生时恢复原尺寸。大厅与合作副本模板都必须保留`monexplain/explain [TextLabel]`，默认文字分别为`Money 500`和`find 0/5`；其余默认文字为`0/500`、空金币进度、`1x Cash/2x Cash/1X Quantity/1.5X Quantity`及`Header.number=0`，默认只启用`Owned/Locked`渐变。客户端按`round(500 × 2.5 ^ RebirthCount)`显示权威金币要求，并按`RebirthCount + 1`显示当前金币倍率；金币足够或本轮彩虹便便数量足够任一项成立即可重生，金币本身不额外消费，成功重生仍由统一重置流程清空本轮金币。
+- `GameHUD.Reset`只能由世界重置Prompt打开，并与图鉴、升级和Rebirth面板互斥。`explain`按权威状态显示`Clear Areas 1-N to reset Coins.`、`Collect all reset coins before resetting again.`或真实庭院原因；锁定时点击确认只让该文字放大到1.12倍并短暂变为`RGB(255,80,80)`，随后恢复Studio原色与尺寸。`UIGradient/UIGradient2`必须严格二选一，服务端确认成功后关闭面板。
 - `Frame.QuickSell`只连接客户端点击；未拥有Game Pass `1941655401`时打开原生购买框，拥有后调用`RequestQuickSell`。客户端不得直接移除背包或失物，也不得因购买完成自动结算。
-- `HUDRoot.Automatic`必须是`GuiButton`并保留直属`TextLabel/UIGradient1/UIGradient2`。代码只写`ON/OFF`并在两个渐变间切换；按钮状态仅属于当前会话，不进入DataStore。
+- `HUDRoot.Automatic`必须是`GuiButton`并保留直属`off [TextLabel]`、`OP [TextLabel]`和`UIGradient1/UIGradient2 [UIGradient]`。代码只在`off`写`ON/OFF`并在两个渐变间切换，不修改`OP`标题；任一功能节点缺失或类型错误时只警告并安全停用Automatic，不得无限等待或阻塞客户端Bootstrap。按钮状态仅属于当前会话，不进入DataStore。
 - `HUDRoot.Diamond`已删除，客户端不得等待或重建钻石余额框。
-  - `fanhui.Lobby [TextButton]`只用于把当前角色移动到唯一启用的`Workspace.SpawnLocation`，不是多人大厅或跨Place Teleport入口。节点缺失或类型错误时客户端只警告并关闭该按钮功能，不得阻断其他控制器启动。
+  - `fanhui.Lobby [TextButton]`在大厅和合作副本都显示，只用于把当前角色移动到本Place唯一启用的`Workspace.SpawnLocation`，不是多人大厅或跨Place Teleport入口。`fanhui.Return`只在合作副本打开`fanhuidating`，确认后复用`RequestCoopReturn`保存并优先返回TeleportData登记的原大厅服务器，失败时回退到任意大厅服务器。任一副本确认节点缺失或类型错误时只警告并隐藏Return，不得阻断Lobby返回出生点或合作控制器其余功能。
   - `HUDRoot.GetDiamond`保留原对象名，作为失物首次获得、失物金币和区域中央提示的只读视觉模板。首次获得普通失物时，客户端只在世界飞行动画结束且收到权威入库成功结果后克隆它并显示`NEW!`与物品图片；提交失物时显示金币图片和`+最终实际到账金币`并飞入`CoinsFrame.Value`。
 - 同一模板也用于区域解锁中央提示；图片来自目标区域`RegionConfig.Image`，八区当前共用临时占位图，后续只替换配置资源ID，不新增Studio图片对象。
 
 - `GetHint`、`GetDiamond`、`ToolFrame.ImageButton`、失物`ItemFrame`、图鉴`Template`、`GameHUD.NotificationFrame`、`HUDRoot.NotificationFrame02`和升级面板是隐藏模板或隐藏容器，运行时代码不得销毁原对象。
-- `GameHUD.NotificationFrame.Notification`同时承载退出菜单保存结果；ESC/CoreGui菜单保持打开且服务端保存成功时显示`Progress saved.`，失败时显示`Save failed. Please try again.`。该提示不走默认渐隐，`GuiService.MenuClosed`后立即隐藏并恢复原教程常驻文字；无需新增Studio UI对象。
-- `GetHint.Icon`必须是`ImageLabel`。运行时只修改`LeafGainHint`克隆的`Image`和`TextLabel.Text`，原模板保持隐藏且保留Studio默认图片作为未知叶子类型的回退图标。逐片提示通过0.04秒短时队列连续生成，队列为空时首个可立即出现，任意Heartbeat最多新建1个；已排期与正在播放的提示合计最多30个，超额项直接省略、不合并且不补播。提示位置由客户端按当前HUD尺寸生成：中心15%、外围85%，外圈约覆盖90%宽和80%高并保留24像素边距；Studio模板的位置不作为运行时出生范围。提示停留后飞向`BagFrame.BarBackground`中心，1秒内同步渐隐并缩至原大小20%；完成动画的克隆会恢复模板透明度、可见性、文字、图片、位置和缩放后进入客户端对象池复用，运行时代码不得销毁或修改原模板。
+- `GameHUD.NotificationFrame.Notification`同时承载退出菜单保存结果；ESC/CoreGui菜单保持打开且服务端保存成功时显示`Progress saved.`，失败时显示`Save failed. Please try again.`。该提示不走默认渐隐，`GuiService.MenuClosed`后立即隐藏并恢复当前最高优先级常驻文字；教程来源高于门价建议来源，无需新增Studio UI对象。
+- `HUDRoot.GetHint`不再生成任何运行时克隆，也不再随机出现在屏幕或飞向背包；客户端只保证它保持隐藏。正式逐片反馈统一使用`ReplicatedStorage.tishi`世界模板。
 - `HUDRoot.CameraButton`与`HUDRoot.comok`必须不存在；客户端不得等待、查找或创建替代对象。所有设备固定第三人称，不提供视角或Ctrl鼠标提示UI。
 - 图鉴运行时只克隆`Template`生成LostItem01～25条目；`Amount`显示下一未领取节点，`cost`按当前`StateSnapshot.LeafValueMultiplier`显示该失物倍率后单件兑换价值，`Claim.Title`仍显示不应用价值倍率的本档基础金币奖励。存在下一档时`Claim`始终可见，未达标点击显示目标提示；100档领取后隐藏`Claim`。可选`Claimed [GuiObject]`存在时同步显示，缺失时不等待、不创建替代节点且不影响客户端启动。
 - `ToolFrame.ImageButton.Visible=false`。客户端按库存克隆按钮，`ImageLabel`只显示配置图片，`ToolName`只显示名称；键盘可用时`key`按当前槽位显示`1～9`，纯触屏或第10槽以后清空并隐藏；`number`继续独立显示失物堆叠数量`xN`，允许和`key`同时显示。`UIStroke`的粗细、透明度和缩放模式沿用Studio模板，客户端只按实际装备状态将颜色切换为已装备`#FFFFFF`、未装备`#808080`。现有横向`UIListLayout`负责居中和排序，Roblox默认Backpack栏由客户端关闭。
-- `invite.List.muban.name`显示在线玩家的`DisplayName`，`Image.Icon2`显示其HeadShot头像；`invite`向该玩家发送进入自己庭院的邀请，`visit yard`直接进入该玩家的庭院。`invite.nodabian.allowed`由客户端按权威`AllowGuestPoop`显示`Allowed/Blocked`；`GoHome`仅在访问别人庭院时显示并返回自己的庭院。客户端不得再等待旧节点`Title/Icon/ImageButton/jinru/nodabian.Title`。
+- `GameHUD.Frame.invite [GuiButton]`是官方体验邀请入口。大厅客户端点击后调用`SocialService:CanSendGameInviteAsync()`，可用时打开`PromptGameInvite()`；不配置LaunchData，不打开自定义面板。Coop客户端隐藏该按钮。`GameHUD.invite`、`GameHUD.accept`和`ReplicatedStorage.frend`均为可选退休对象，运行时代码不得读取或等待。
+- `HUDRoot.Friendcollection`只兼容旧存档中已有的好友奖励：`ImageButton.number`显示领取金额，`friend`显示贡献者；没有待领奖励时隐藏。它不依赖退休邀请UI或访客模板。
 - `HUDRoot.jiaqun [GuiButton]`是官方社区入口；客户端连接其`Activated`事件，不覆盖Studio中的位置、尺寸、图片或文字。目标社区固定为Group ID `220344414`，使用Roblox原生加入界面而不是外部网页。服务端确认会员并发放一次性1000金币后，客户端只把当前玩家`PlayerGui`中的克隆设为隐藏；不得删除或隐藏StarterGui模板，否则未加入玩家将失去入口。
 - `CoinsFrame.Value`只显示金币数值，使用小于1k原样、达到1k后一位小数向上取整的小写紧凑格式，不添加`Coins:`等说明文字。`CoinsFrame.+Value`默认隐藏并使用`+0`：正向金币继续使用累计/飞入动画，双倍金币时先显示`+基础值`再显示无前导加号的`基础值x2`；区域门权威扣款成功时复用同一节点显示`-门价`并与整个CoinsFrame各脉冲一次，约1秒后恢复隐藏。扣款表现必须取消冲突的正向动画并采用`CoinSpendEvent.TargetCoins`，失败请求不得显示负数。失物金币会与`GetDiamond`中央提示同时开始，连续提交逐笔排队。
-- `TrailMultiplierDisplay.TrailMultiplierLabel`与`RebirthMultiplierDisplay.RebirthMultiplierLabel`是可选的只读倍率标签；存在时前者显示权威`PersonalLeafValueMultiplier`并与Value Multiplier升级卡的当前个人升级倍率一致，后者独立显示重生叶价倍率，固定格式为`Multiplier x数值 (Upgrade/Rebirth)`。两者都不得混入区域倍率，缺失或类型错误只跳过对应显示，不得阻断HUD及其他客户端控制器启动。
+- `TrailMultiplierDisplay.TrailMultiplierLabel`与`RebirthMultiplierDisplay.RebirthMultiplierLabel`是可选的只读倍率标签；存在时前者只显示老档权威`PersonalLeafValueMultiplier`，倍率为x1时隐藏整个`TrailMultiplierDisplay`，大于x1时按`Multiplier x数值 (Upgrade)`显示；后者独立显示重生叶价倍率。两者都不得混入区域倍率，缺失或类型错误只跳过对应显示，不得阻断HUD及其他客户端控制器启动。
 - `GameHUD.Commodity`已废弃，客户端不再读取、等待或显示该对象；正确Place可保留隐藏模板，也可直接删除整个层级，不影响Bootstrap或世界购买台。
 - `GameHUD.HUDRoot.x2coins [GuiButton]`是独立双倍金币购买入口，不得放入`Commodity`轮换。它必须保留直属`Rb [TextLabel]`作为价格和直属`TextLabel`作为`x2 Cash`标题；客户端只写`Rb`，资格未就绪或拥有后隐藏，未拥有时常驻且点击打开Game Pass `1935165459`购买提示。
 - `Area_01～Area_08.Sign.Sign.SurfaceGui.TextButton`是可选的世界双倍金币购买入口；存在时点击复用`x2coins`的同一购买锁和Game Pass提示。缺失或尚未Streaming载入时不得等待、警告或影响客户端启动，运行时载入后自动接入。未拥有玩家保持购买牌Studio原样；`DoubleCoinsOwned=true`后，当前玩家客户端把直属`Area_XX.Sign`内全部BasePart设为本地透明并关闭全部SurfaceGui，原始`LocalTransparencyModifier/Enabled`必须可恢复，且不得影响其他玩家。
@@ -422,14 +476,15 @@ StarterGui.GameHUD
 - `HUDRoot.NotificationFrame00`默认隐藏，`Notification`保留Studio文字与样式；权威`BagFull=true`时常驻显示且自身保持Studio原始Rotation。未满袋时可显示当前便便教程的英文步骤；袋满覆盖教程文字，清空后恢复。只有玩家同时按住清扫输入才持续修改独立的`BagFrame.Rotation`形成左右抖动，松开或清空后恢复。该提示不复用`GameHUD.NotificationFrame`。
 - `LostItem099.Model["1"]`必须保留为可着色`BasePart`（当前为MeshPart）。模板内Script不会被运行时克隆保留；世界实例、轮播假模型和角色手持实例的Neon彩虹颜色由客户端`PoopController`统一驱动，卸下后恢复Studio模板的原始颜色与材质。
 - `LostItem099`的世界Prompt、制造者牌、快捷栏和携带Tool统一从共享配置读取`Rainbow Poop`；`LostItem095～098`继续显示`Poop`。
-- `AreaProgressFrame`显示玩家脚下`Area_XX.ground`对应区域的信息：`Value`固定显示叶子实体`已收集/总数`，`Icon`读取该区`LeafConfig.AreaPools`第一种类型的图片。`BarBackground`图形进度条与`luck`均已删除，不属于对象契约，客户端不得等待、恢复或更新这些节点。`Lossofprogress.Visible`只由Studio模板决定，客户端不得根据初始化、区域完成、区域切换或庭院切换修改父Frame可见性；内部次数与图片仍随`CurrentAreaId`和活动庭院实时更新，道路上保留最后区域。
-- `GameHUD.Frame.Codex/invite/Upgrade/Rebirth`分别切换图鉴、邀请、升级和重生主界面；再次点击当前入口关闭。四个主界面由客户端统一互斥，打开其中一个会关闭其余三个。任一主界面可见时，客户端在`Lighting`创建或复用`LocalModalPanelBlur [BlurEffect]`，固定`Size=18`并启用；全部关闭后禁用。该模糊对象是纯本地运行时效果，不要求Studio预置。
-- 四个主界面打开时从各自Studio原位置下方上移，略微越过后向下回落到原位置；运行时代码只暂时修改`Position`，关闭时恢复。四个入口按钮的`AnchorPoint`和Studio尺寸保持不变，客户端仅在PlayerGui克隆中创建或复用`UIScale`实现鼠标悬停1.08倍放大，移开恢复原大小。
+- `AreaProgressFrame`显示玩家脚下`Area_XX.ground`对应区域的信息：`Value`固定显示叶子实体`已收集/总数`，`Icon`读取该区`LeafConfig.AreaPools`第一种类型的图片。`BarBackground`图形进度条与`luck`均已删除，不属于对象契约，客户端不得等待、恢复或更新这些节点。`Lossofprogress.Visible`只由Studio模板决定，客户端不得根据初始化、区域完成或区域切换修改父Frame可见性；内部次数与图片仍随`CurrentAreaId`和个人庭院实时更新，道路上保留最后区域。
+- `GameHUD.Frame.Codex/Upgrade/Rebirth`分别切换图鉴、升级和重生主界面；`GameHUD.Reset`由世界Prompt打开。四个主界面由客户端统一互斥，打开其中一个会关闭当前面板。`Frame.invite`只打开Roblox原生邀请界面，不参与自定义面板互斥或Blur。任一自定义主界面可见时，客户端在`Lighting`创建或复用`LocalModalPanelBlur [BlurEffect]`，固定`Size=18`并启用；全部关闭后禁用。该模糊对象是纯本地运行时效果，不要求Studio预置。
+- 五个主界面打开时从各自Studio原位置下方上移，略微越过后向下回落到原位置；运行时代码只暂时修改`Position`，关闭时恢复。现有HUD入口按钮的`AnchorPoint`和Studio尺寸保持不变，客户端仅在PlayerGui克隆中创建或复用`UIScale`实现鼠标悬停1.08倍放大，移开恢复原大小。
 - `GameHUD.Frame.Upgrade [GuiButton]`还可由Area_01～09中实际存在的`UPattribute.up.ProximityPrompt`打开同一面板。HUD按钮不要求玩家靠近升级台；`Banner.Close`或键盘E键也可关闭面板。
-- `GameHUD.UPattribute`必须保留`UPattributeicon.1～4 [GuiButton]`及直属`Player/Hands/Broom/Blower [ScrollingFrame]`。每个分页按钮必须包含`Stud.Cost [UIGradient]`和`Stud["Owned/Locked"] [UIGradient]`：当前页仅启用`Owned/Locked`，其余按钮仅启用`Cost`。按钮依次切换四页；每张卡保留直属`Name/Info/explain [TextLabel]`及`BuyButtons.Buy [GuiButton]`，购买按钮内必须存在`Cost [TextLabel]`。每个Buy还应有`Decor.Stud`和`Highlight`容器；`Hands["Pickup Amount"].BuyButtons.Buy.Decor.Stud.UIGradient002 [UIGradient]`及同一Buy下`Highlight.UIStroke002 [UIStroke]`提供灰色不可购买模板。运行时会把缺少的模板克隆到其余卡片相同层级，不能放置同名但类型不同的对象。
-- Player页只保留`Pickup Amount → Move Speed`与`Pickup Speed → Value Multiplier`；旧`Pickup Range`幸运卡可直接删除。Hands、Broom、Blower各保留`Pickup Amount/Pickup Range/Pickup Speed`三张模板卡，运行时名称按真实属性覆盖。
+- `GameHUD.UPattribute`必须保留`UPattributeicon.1～4 [GuiButton]`及直属`Player/Hands/Broom/Blower [ScrollingFrame]`。每个分页按钮必须包含`Stud.Cost [UIGradient]`和`Stud["Owned/Locked"] [UIGradient]`：当前页仅启用`Owned/Locked`，其余按钮仅启用`Cost`。按钮依次切换四页；每张普通属性卡保留直属`Name/Info/explain [TextLabel]`及`BuyButtons.Buy [GuiButton]`，购买按钮内必须存在`Cost [TextLabel]`。每个Buy还应有`Decor.Stud`和`Highlight`容器；`Hands["Pickup Amount"].BuyButtons.Buy.Decor.Stud.UIGradient002 [UIGradient]`及同一Buy下`Highlight.UIStroke002 [UIStroke]`提供灰色不可购买模板。运行时会把缺少的模板克隆到其余普通属性卡相同层级，不能放置同名但类型不同的对象。`UPattribute.Bag`和`UPattributeicon.5`已删除，不再属于契约。
+- 大厅与合作副本的`UPattribute.Player`都必须保留`Pickup0001～0003 [GuiObject]`三张背包卡。每张卡必须包含直属`Name/Info [TextLabel]`、`Image.Icon [ImageLabel]`、`BuyButtons.Buy/Bu2 [GuiButton]`及两个按钮各自的`Cost [TextLabel]`；代码不创建、克隆或移动这些卡。`Pickup0001`显示下一档bag02～08，之后显示扩容图标`rbxassetid://114584597270599`及`当前容量->目标容量`；`Pickup0002/0003`固定显示bag09 3K与bag010 5K。2026-08-19已在大厅Place `95556867008792`和副本Place `131244809352557`核验三张卡及全部数据节点类型正确。
+- Player页普通属性只保留`Pickup Amount → Move Speed`；`Pickup Speed → Value Multiplier`已从大厅Place `95556867008792`和副本Place `131244809352557`删除，旧发布模板若残留则客户端只销毁PlayerGui克隆。背包`Pickup0001～0003`不参与普通属性绑定。Hands、Broom、Blower各保留`Pickup Amount/Pickup Range/Pickup Speed`三张模板卡，运行时名称按真实属性覆盖；尤其不得删除Hands页教程使用的`Pickup Speed`。
 - 新手进入双手数量或速度升级步骤时，客户端自动打开Hands页，并脉冲对应卡的`BuyButtons.Buy`；同一步骤手动关闭后不因重复快照再次强制打开。
-- `HUDRoot.yin`默认由教程客户端隐藏，仅在第1步于Studio原位置持续显示“按下拾取”，玩家累计实际装袋或即时回收第15片叶子后隐藏；升级步骤不再移动或显示该对象。
+- `HUDRoot.yin`默认由教程客户端隐藏；第1步进入Area_01钱币水平距离6 studs后才在Studio原位置显示`Press to Pick Up`，玩家累计实际装袋或即时回收第15片叶子后隐藏；升级步骤不再移动或显示该对象。
 - 图鉴Template必须包含名称、难度、介绍、次数和图标，并应保留`Main.UIGradient1～5`。五个渐变依次对应`Common/Uncommon/Rare/Legendary/Mythic`，完整时每张卡只启用其稀有度对应的一项；`UIGradient5`使用粉紫色。任一渐变缺失或类型错误时客户端只警告一次、保留Studio模板默认外观，不得阻断快捷栏、清扫范围及其他控制器启动。运行时仍按配置生成25项，未收集图标显示黑色剪影。
 - `NotificationFrame02`默认隐藏，Studio位置是第一条可购买提示的最终位置。运行时只克隆下一级普通背包、Tool02和Tool03购买提示，最多同时4条，按模板高度加8像素向下排列；`Notification`显示候选文字，图片为空时隐藏`Icon`。
 - UI颜色、字体、渐变和最终布局由Studio决定，代码只维护固定数据节点和动画状态。
@@ -437,7 +492,7 @@ StarterGui.GameHUD
 ## SoundService契约
 
 - `Grass_walk_2 [Sound]`：单片装袋音效模板。
-- `Recycle [Sound]`：每片回收飞叶抵达时的本地音效模板。
+- `Recycle [Sound]`：每片回收飞叶或门购买金币抵达时的本地音效模板；门动画逐枚复用同一对象池，不创建新的Studio声音对象。
 - `demo [Sound]`：失物成功兑换音效模板，每个有效兑换条目播放一次，固定间隔0.1秒。
 - `Background [Sound]`：背景音乐，Studio配置`Looped=true`、`Playing=true`。
 - `leafBlower [Sound]`：吹风机本地工作音效模板，Studio保持`Looped=false/Playing=false`。客户端初始化时克隆并异步预加载唯一的本地循环实例；操作者按住时直接`:Play()`，停止工作时`:Stop()`并将`TimePosition`归零但保留实例供下次复用。

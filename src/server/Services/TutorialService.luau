@@ -10,12 +10,25 @@ local TutorialService = {}
 
 local sessions = {}
 
+local function normalizePoopRedeemGuidanceShownCount(value)
+	return math.clamp(
+		math.floor(tonumber(value) or 0),
+		0,
+		TutorialConfig.PoopRedeemGuidanceLimit
+	)
+end
+
 local function makeSession(progress, onboardingFunnel)
 	local source = type(progress) == "table" and progress or {}
 	local funnel = type(onboardingFunnel) == "table" and onboardingFunnel or {}
 	local bagGuidancePending = source.BagGuidancePending == true
 	local poopGuidanceCompleted = funnel.PoopGuidanceCompleted == true
-	local poopGuidancePending = not poopGuidanceCompleted and funnel.PoopGuidancePending == true
+	local poopRedeemGuidanceShownCount = normalizePoopRedeemGuidanceShownCount(
+		funnel.PoopRedeemGuidanceShownCount
+	)
+	local poopGuidancePending = not poopGuidanceCompleted
+		and poopRedeemGuidanceShownCount < TutorialConfig.PoopRedeemGuidanceLimit
+		and funnel.PoopGuidancePending == true
 	local broomGuidanceCompleted = funnel.BroomGuidanceCompleted == true
 	local broomGuidanceReady = not broomGuidanceCompleted and funnel.BroomGuidanceReady == true
 	local step = math.clamp(
@@ -51,6 +64,7 @@ local function makeSession(progress, onboardingFunnel)
 		BagGuidanceReady = bagGuidancePending and source.BagGuidanceReady == true,
 		PoopGuidancePending = poopGuidancePending,
 		PoopGuidanceCompleted = poopGuidanceCompleted,
+		PoopRedeemGuidanceShownCount = poopRedeemGuidanceShownCount,
 		PoopGuidanceStage = poopGuidancePending and "Make" or nil,
 		PoopGuidanceSpawnId = nil,
 		BroomGuidanceReady = broomGuidanceReady,
@@ -200,6 +214,9 @@ function TutorialService:_persistProgress(player, session)
 	if type(funnel) == "table" then
 		funnel.PoopGuidancePending = session.PoopGuidancePending == true
 		funnel.PoopGuidanceCompleted = session.PoopGuidanceCompleted == true
+		funnel.PoopRedeemGuidanceShownCount = normalizePoopRedeemGuidanceShownCount(
+			session.PoopRedeemGuidanceShownCount
+		)
 		funnel.BroomGuidanceReady = session.BroomGuidanceReady == true
 		funnel.BroomGuidanceCompleted = session.BroomGuidanceCompleted == true
 	end
@@ -232,7 +249,11 @@ function TutorialService:_resumeLoadedSession(player, session)
 	if sessions[player] ~= session or not self.PlayerDataService:GetState(player) then
 		return
 	end
-	if session.PoopGuidancePending and not session.PoopGuidanceCompleted then
+	if
+		session.PoopGuidancePending
+		and not session.PoopGuidanceCompleted
+		and session.PoopRedeemGuidanceShownCount < TutorialConfig.PoopRedeemGuidanceLimit
+	then
 		session.PoopGuidanceStage = "Make"
 		session.PoopGuidanceSpawnId = nil
 	end
@@ -401,7 +422,12 @@ function TutorialService:OnBagUpgradePurchased(player, purchaseKind)
 	end
 	session.BagGuidancePending = false
 	session.BagGuidanceReady = false
-	if purchaseKind == "Coins" and not session.PoopGuidanceCompleted then
+	if
+		purchaseKind == "Coins"
+		and not session.PoopGuidanceCompleted
+		and session.PoopRedeemGuidanceShownCount < TutorialConfig.PoopRedeemGuidanceLimit
+		and session.PoopGuidanceStage == nil
+	then
 		session.PoopGuidancePending = true
 		session.PoopGuidanceStage = "Make"
 		session.PoopGuidanceSpawnId = nil
@@ -429,15 +455,41 @@ end
 
 function TutorialService:OnPoopPickedUp(player, spawnId)
 	local session = self:_ensureSession(player)
+	if type(spawnId) ~= "string" or spawnId == "" then
+		return
+	end
+	-- One active sell target represents one visible guidance use. Extra successful
+	-- poop pickups while that Beam is active neither replace the target nor consume
+	-- another use.
+	if session.PoopGuidanceStage == "Sell" then
+		return
+	end
+	if session.PoopRedeemGuidanceShownCount >= TutorialConfig.PoopRedeemGuidanceLimit then
+		return
+	end
+
+	local isFirstTutorialPickup = session.PoopGuidancePending
+		and not session.PoopGuidanceCompleted
+		and session.PoopGuidanceStage == "Pickup"
+		and spawnId == session.PoopGuidanceSpawnId
+	if session.PoopGuidancePending and not isFirstTutorialPickup then
+		return
+	end
+	-- Before onboarding is closed, the first use belongs to the existing
+	-- make -> pickup -> sell flow. Rebirth closes that flow without spending the
+	-- persistent quota, so a later general pickup may still use the remainder.
 	if
 		not session.PoopGuidancePending
-		or session.PoopGuidanceCompleted
-		or session.PoopGuidanceStage ~= "Pickup"
-		or spawnId ~= session.PoopGuidanceSpawnId
+		and not session.PoopGuidanceCompleted
+		and session.PoopRedeemGuidanceShownCount <= 0
 	then
 		return
 	end
+
+	session.PoopRedeemGuidanceShownCount += 1
+	session.PoopGuidancePending = false
 	session.PoopGuidanceStage = "Sell"
+	session.PoopGuidanceSpawnId = spawnId
 	session.SequenceId += 1
 	self:_persistProgress(player, session)
 	self:_push(player)
@@ -446,9 +498,7 @@ end
 function TutorialService:OnLostItemsRedeemed(player, redeemedItems)
 	local session = self:_ensureSession(player)
 	if
-		not session.PoopGuidancePending
-		or session.PoopGuidanceCompleted
-		or session.PoopGuidanceStage ~= "Sell"
+		session.PoopGuidanceStage ~= "Sell"
 		or type(redeemedItems) ~= "table"
 	then
 		return

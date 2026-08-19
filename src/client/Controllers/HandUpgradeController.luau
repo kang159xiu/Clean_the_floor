@@ -37,7 +37,6 @@ local PAGE_BUTTON_NAMES = {
 local CARD_CONFIGS = {
 	Player = {
 		{ CardName = "Pickup Amount", Kind = "Player", AttributeId = "MoveSpeed" },
-		{ CardName = "Pickup Speed", Kind = "Player", AttributeId = "LeafValue" },
 	},
 	Hands = {
 		{ CardName = "Pickup Amount", Kind = "Hand", AttributeId = "Amount" },
@@ -64,14 +63,6 @@ local function warnDisabledStyleOnce(message)
 	end
 	disabledStyleWarnings[message] = true
 	warn("[HandUpgradeController] " .. message)
-end
-
-local function formatMultiplier(value)
-	local numeric = math.max(0, tonumber(value) or 1)
-	if math.abs(numeric - math.floor(numeric + 0.5)) < 0.001 then
-		return "x" .. tostring(math.floor(numeric + 0.5))
-	end
-	return "x" .. string.format("%.2f", numeric):gsub("0+$", ""):gsub("%.$", "")
 end
 
 local function formatNumber(value)
@@ -283,7 +274,7 @@ function HandUpgradeController:SelectPage(pageName)
 		return false
 	end
 	self.SelectedPageName = pageName
-	for _, candidateName in PAGE_ORDER do
+	for _, candidateName in self.PageOrder do
 		local selected = candidateName == pageName
 		self.Pages[candidateName].Visible = selected
 		local visuals = self.PageButtonVisuals[candidateName]
@@ -301,8 +292,10 @@ function HandUpgradeController:OpenPage(pageName)
 	return true
 end
 
-function HandUpgradeController:Init(remotes)
+function HandUpgradeController:Init(remotes, toolController)
 	self.Remotes = remotes
+	self.ToolController = toolController
+	assert(type(toolController) == "table", "HandUpgradeController requires ToolController")
 	self.Player = Players.LocalPlayer
 	self.Levels = {
 		Range = 0,
@@ -317,7 +310,6 @@ function HandUpgradeController:Init(remotes)
 	self.PlayerAttributeLevels = PlayerAttributeConfig.MakeDefaultLevels()
 	self.Coins = 0
 	self.WalkSpeed = 16
-	self.PersonalLeafValueMultiplier = 1
 	self.UnlockedTools = { Tool01 = true }
 	self.RebirthCount = 0
 	self.BoundWorldAreas = {}
@@ -335,6 +327,11 @@ function HandUpgradeController:Init(remotes)
 	self.Panel = gameHUD:WaitForChild("UPattribute")
 	assert(self.Panel:IsA("GuiObject"), "GameHUD.UPattribute must be a GuiObject")
 	self.Panel.Active = true
+	local playerPage = self.Panel:WaitForChild("Player")
+	local retiredLeafValueCard = playerPage:FindFirstChild("Pickup Speed")
+	if retiredLeafValueCard then
+		retiredLeafValueCard:Destroy()
+	end
 	local disabledStyleSource = findChildPath(self.Panel, {
 		"Hands",
 		"Pickup Amount",
@@ -366,7 +363,8 @@ function HandUpgradeController:Init(remotes)
 	self.PageButtons = {}
 	self.PageButtonVisuals = {}
 	local iconFrame = self.Panel:WaitForChild("UPattributeicon")
-	for _, pageName in PAGE_ORDER do
+	self.PageOrder = table.clone(PAGE_ORDER)
+	for _, pageName in self.PageOrder do
 		local page = self.Panel:WaitForChild(pageName)
 		local pageButton = iconFrame:WaitForChild(PAGE_BUTTON_NAMES[pageName])
 		assert(page:IsA("ScrollingFrame"), page:GetFullName() .. " must be a ScrollingFrame")
@@ -389,7 +387,7 @@ function HandUpgradeController:Init(remotes)
 			Selected = selectedGradient,
 			Unselected = unselectedGradient,
 		}
-		for _, cardConfig in CARD_CONFIGS[pageName] do
+		for _, cardConfig in CARD_CONFIGS[pageName] or {} do
 			self:_bindCard(page, cardConfig)
 		end
 		pageButton.Activated:Connect(function()
@@ -531,7 +529,7 @@ function HandUpgradeController:_setPanelVisible(visible)
 	if shouldBeVisible then
 		self:SelectPage(self.SelectedPageName)
 		ModalPanelEffects.PlayOpen(self.Panel)
-		self.Remotes.SetLeafPickupActive:FireServer(false)
+		self.ToolController:CancelManualPickupInput()
 	else
 		ModalPanelEffects.StopOpen(self.Panel)
 		self.Panel.Visible = false
@@ -570,8 +568,6 @@ function HandUpgradeController:ApplySnapshot(snapshot)
 		)
 	end
 	self.WalkSpeed = tonumber(snapshot.WalkSpeed) or self.WalkSpeed
-	self.PersonalLeafValueMultiplier = tonumber(snapshot.PersonalLeafValueMultiplier)
-		or self.PersonalLeafValueMultiplier
 	self:_renderAll()
 end
 
@@ -598,20 +594,14 @@ function HandUpgradeController:_renderPlayerAttributeBranch(attributeId)
 	local level = PlayerAttributeConfig.NormalizeLevel(attributeId, self.PlayerAttributeLevels[attributeId])
 	local effectiveMax = (attributeId == "MoveSpeed" and self.WalkSpeed >= PlayerAttributeConfig.MaximumWalkSpeed)
 		or PlayerAttributeConfig.IsConfiguredMaxLevel(attributeId, level)
-	local price = if effectiveMax then nil else PlayerAttributeConfig.GetUpgradePrice(attributeId, level)
-	local currentValue
-	local nextValue
-	if attributeId == "MoveSpeed" then
-		currentValue = formatNumber(self.WalkSpeed)
-		nextValue = formatNumber(math.min(
-			PlayerAttributeConfig.MaximumWalkSpeed,
-			self.WalkSpeed + attribute.ValuePerLevel
-		))
-	else
-		local personalMultiplier = math.max(1, tonumber(self.PersonalLeafValueMultiplier) or 1)
-		currentValue = formatMultiplier(personalMultiplier)
-		nextValue = formatMultiplier(personalMultiplier + attribute.ValuePerLevel)
-	end
+	local price = if effectiveMax
+		then nil
+		else PlayerAttributeConfig.GetUpgradePrice(attributeId, level, self.RebirthCount)
+	local currentValue = formatNumber(self.WalkSpeed)
+	local nextValue = formatNumber(math.min(
+		PlayerAttributeConfig.MaximumWalkSpeed,
+		self.WalkSpeed + attribute.ValuePerLevel
+	))
 	branch.Info.Text = formatTransition(currentValue, if price then nextValue else nil)
 	branch.Cost.Text = if price then "$" .. CoinFormat.Compact(price) else "MAX"
 	setUpgradeButtonAvailable(branch, price ~= nil and self.Coins >= price)

@@ -5,6 +5,9 @@ local BOOTSTRAP_DIAGNOSTICS_ENABLED = true
 local BOOTSTRAP_STALL_WARNING_SECONDS = 10
 local BOOTSTRAP_LOG_PREFIX = "[CTF ClientBootstrap]"
 local bootstrapStartedAt = os.clock()
+local CoopMatchConfig = require(ReplicatedStorage.Shared.Config.CoopMatchConfig)
+local IS_COOP = CoopMatchConfig.IsCoop()
+local IS_LOBBY = CoopMatchConfig.IsLobby()
 
 local function logBootstrap(status, stepName, detail)
 	if not BOOTSTRAP_DIAGNOSTICS_ENABLED then
@@ -67,18 +70,17 @@ local remotes = {
 	UpgradePlayerAttribute = getRemote("UpgradePlayerAttribute"),
 	ClaimCodexReward = getRemote("ClaimCodexReward"),
 	ClaimCommunityReward = getRemote("ClaimCommunityReward"),
-	SendYardInvite = getRemote("SendYardInvite"),
-	RespondYardInvite = getRemote("RespondYardInvite"),
-	LeaveVisitedYard = getRemote("LeaveVisitedYard"),
-	EnterYard = getRemote("EnterYard"),
-	SetPoopPermission = getRemote("SetPoopPermission"),
 	ClaimFriendRewards = getRemote("ClaimFriendRewards"),
 	ResetPlayerData = getRemote("ResetPlayerData"),
 	RequestRebirth = getRemote("RequestRebirth"),
+	RequestAreaCoinReset = getRemote("RequestAreaCoinReset"),
+	RequestBagPurchase = getRemote("RequestBagPurchase"),
 	RequestQuickSell = getRemote("RequestQuickSell"),
 	RequestReturnToSpawn = getRemote("RequestReturnToSpawn"),
 	RequestProgressSave = getRemote("RequestProgressSave"),
 	RequestCoinFlip = getRemote("RequestCoinFlip"),
+	RequestPartyAction = getRemote("RequestPartyAction"),
+	RequestCoopReturn = getRemote("RequestCoopReturn"),
 	StateSnapshot = getRemote("StateSnapshot"),
 	LeafCollected = getRemote("LeafCollected"),
 	LeafPickupBatch = getRemote("LeafPickupBatch"),
@@ -95,14 +97,17 @@ local remotes = {
 	UpdateHarvestAim = getRemote("UpdateHarvestAim"),
 	RequestAreaUnlock = getRemote("RequestAreaUnlock"),
 	AreaCompletionNotice = getRemote("AreaCompletionNotice"),
+	AreaCoinResetPrompted = getRemote("AreaCoinResetPrompted"),
+	AreaDoorCoinShortageNotice = getRemote("AreaDoorCoinShortageNotice"),
 	Notification = getRemote("Notification"),
-	YardInviteReceived = getRemote("YardInviteReceived"),
 	YardLeafSnapshot = getRemote("YardLeafSnapshot"),
 	YardLeafDelta = getRemote("YardLeafDelta"),
 	ClearTimeLeaderboardSnapshot = getRemote("ClearTimeLeaderboardSnapshot"),
 	PlaytimeLeaderboardSnapshot = getRemote("PlaytimeLeaderboardSnapshot"),
 	CleanupLeaderboardSnapshot = getRemote("CleanupLeaderboardSnapshot"),
 	PoopLeaderboardSnapshot = getRemote("PoopLeaderboardSnapshot"),
+	PartySnapshot = getRemote("PartySnapshot"),
+	CoopMatchSnapshot = getRemote("CoopMatchSnapshot"),
 }
 
 local StateSnapshotStore = runBootstrapStep("Module:StateSnapshotStore", function()
@@ -116,9 +121,11 @@ local controllersFolder = runBootstrapStep("ControllerFolder", function()
 end)
 local controllerModuleNames = {
 	"HUDController",
+	"LeafGainHintController",
 	"ExitSaveController",
 	"ToolController",
 	"CameraController",
+	"PerformanceController",
 	"HarvestRangeController",
 	"HandUpgradeController",
 	"LocalLostItemController",
@@ -131,19 +138,22 @@ local controllerModuleNames = {
 	"AffordableNotificationController",
 	"TutorialController",
 	"RebirthController",
+	"AreaCoinResetController",
 	"QuickSellController",
 	"LobbyReturnController",
 	"DoubleCoinsButtonController",
 	"ToolGamePassDisplayController",
 	"PermanentBagDisplayController",
-	"YardUIController",
-	"VisitorBillboardController",
+	"OfficialInviteController",
+	"FriendRewardController",
 	"YardLeafController",
 	"PoopController",
 	"AutomaticController",
 	"CoinFlipController",
 	"CommunityController",
 	"TimeLeaderboardController",
+	"PartyController",
+	"CoopMatchController",
 }
 local controllers = {}
 for _, moduleName in controllerModuleNames do
@@ -158,6 +168,13 @@ local controllerJobDefinitions = {
 		Dependencies = {},
 		Run = function()
 			controllers.HUDController:Init(remotes)
+		end,
+	},
+	{
+		Name = "LeafGainHintController",
+		Dependencies = {},
+		Run = function()
+			controllers.LeafGainHintController:Init(remotes)
 		end,
 	},
 	{
@@ -221,9 +238,9 @@ local controllerJobDefinitions = {
 	},
 	{
 		Name = "AreaDoorController",
-		Dependencies = {},
+		Dependencies = { "HUDController" },
 		Run = function()
-			controllers.AreaDoorController:Init(remotes)
+			controllers.AreaDoorController:Init(remotes, controllers.HUDController)
 		end,
 	},
 	{
@@ -235,21 +252,28 @@ local controllerJobDefinitions = {
 	},
 	{
 		Name = "HandUpgradeController",
-		Dependencies = {},
+		Dependencies = { "ToolController" },
 		Run = function()
-			controllers.HandUpgradeController:Init(remotes)
+			controllers.HandUpgradeController:Init(remotes, controllers.ToolController)
 		end,
 	},
 	{
 		Name = "TutorialController",
-		Dependencies = { "HUDController", "ToolController", "AreaDoorController", "HandUpgradeController" },
+		Dependencies = {
+			"HUDController",
+			"ToolController",
+			"AreaDoorController",
+			"HandUpgradeController",
+			"YardLeafController",
+		},
 		Run = function()
 			controllers.TutorialController:Init(
 				remotes,
 				controllers.HUDController,
 				controllers.ToolController,
 				controllers.AreaDoorController,
-				controllers.HandUpgradeController
+				controllers.HandUpgradeController,
+				controllers.YardLeafController
 			)
 		end,
 	},
@@ -258,6 +282,13 @@ local controllerJobDefinitions = {
 		Dependencies = { "HUDController" },
 		Run = function()
 			controllers.RebirthController:Init(remotes, controllers.HUDController)
+		end,
+	},
+	{
+		Name = "AreaCoinResetController",
+		Dependencies = { "HUDController" },
+		Run = function()
+			controllers.AreaCoinResetController:Init(remotes, controllers.HUDController)
 		end,
 	},
 	{
@@ -290,10 +321,17 @@ local controllerJobDefinitions = {
 		end,
 	},
 	{
-		Name = "YardLeafController",
+		Name = "PerformanceController",
 		Dependencies = {},
 		Run = function()
-			controllers.YardLeafController:Init(remotes)
+			controllers.PerformanceController:Init()
+		end,
+	},
+	{
+		Name = "YardLeafController",
+		Dependencies = { "PerformanceController" },
+		Run = function()
+			controllers.YardLeafController:Init(remotes, controllers.PerformanceController)
 		end,
 	},
 	{
@@ -387,20 +425,59 @@ local controllerJobDefinitions = {
 		end,
 	},
 	{
-		Name = "YardUIController",
-		Dependencies = {},
+		Name = "OfficialInviteController",
+		Dependencies = { "HUDController" },
 		Run = function()
-			controllers.YardUIController:Init(remotes)
+			controllers.OfficialInviteController:Init(remotes, controllers.HUDController)
 		end,
 	},
 	{
-		Name = "VisitorBillboardController",
+		Name = "FriendRewardController",
 		Dependencies = {},
 		Run = function()
-			controllers.VisitorBillboardController:Init(remotes)
+			controllers.FriendRewardController:Init(remotes)
 		end,
 	},
 }
+
+if IS_LOBBY then
+	table.insert(controllerJobDefinitions, {
+		Name = "PartyController",
+		Dependencies = {},
+		Run = function()
+			controllers.PartyController:Init(remotes)
+		end,
+	})
+elseif IS_COOP then
+	local disabledInCoop = {
+		CommunityController = true,
+		AirWallController = true,
+		TutorialController = true,
+		RebirthController = true,
+		AreaCoinResetController = true,
+		CoinFlipController = true,
+		LostItemGuidanceController = true,
+		RecycleGuidanceController = true,
+		FriendRewardController = true,
+	}
+	for index = #controllerJobDefinitions, 1, -1 do
+		if disabledInCoop[controllerJobDefinitions[index].Name] then
+			table.remove(controllerJobDefinitions, index)
+		end
+	end
+	table.insert(controllerJobDefinitions, {
+		Name = "CoopMatchController",
+		Dependencies = { "HUDController", "ToolController", "AutomaticController", "LobbyReturnController" },
+		Run = function()
+			controllers.CoopMatchController:Init(
+				remotes,
+				controllers.HUDController,
+				controllers.ToolController,
+				controllers.AutomaticController
+			)
+		end,
+	})
+end
 
 local controllerJobs = {}
 for _, definition in controllerJobDefinitions do

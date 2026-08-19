@@ -1,7 +1,12 @@
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local RebirthConfig = require(ReplicatedStorage.Shared.Config.RebirthConfig)
+
 local MAX_CURRENCY_VALUE = 1e100
 local MAX_SAFE_LEVEL = 1_000_000
 
-local order = { "MoveSpeed", "LeafValue" }
+local order = { "MoveSpeed" }
+local persistedOrder = { "MoveSpeed", "LeafValue" }
 
 local attributes = {
 	MoveSpeed = {
@@ -11,12 +16,18 @@ local attributes = {
 		MaxLevel = 24,
 		ValuePerLevel = 1,
 	},
+}
+
+local legacyAttributes = {
 	LeafValue = {
 		Id = "LeafValue",
-		DisplayName = "Value Multiplier",
-		BasePrice = 500,
 		ValuePerLevel = 0.5,
 	},
+}
+
+local persistedAttributes = {
+	MoveSpeed = attributes.MoveSpeed,
+	LeafValue = legacyAttributes.LeafValue,
 }
 
 local function finiteNumber(value)
@@ -29,7 +40,7 @@ local function normalizeLevel(attributeId, level)
 		numericLevel = 0
 	end
 	local normalized = math.clamp(math.floor(numericLevel), 0, MAX_SAFE_LEVEL)
-	local attribute = attributes[attributeId]
+	local attribute = persistedAttributes[attributeId]
 	if attribute and attribute.MaxLevel then
 		normalized = math.min(normalized, attribute.MaxLevel)
 	end
@@ -43,7 +54,7 @@ local function isConfiguredMaxLevel(attributeId, level)
 		and normalizeLevel(attributeId, level) >= attribute.MaxLevel
 end
 
-local function getUpgradePrice(attributeId, currentLevel)
+local function getUpgradePrice(attributeId, currentLevel, rebirthCount)
 	local attribute = attributes[attributeId]
 	if not attribute or isConfiguredMaxLevel(attributeId, currentLevel) then
 		return nil
@@ -59,7 +70,11 @@ local function getUpgradePrice(attributeId, currentLevel)
 	if not finiteNumber(price) or price > MAX_CURRENCY_VALUE then
 		return nil
 	end
-	return math.floor(price + 0.5)
+	local scaledPrice = RebirthConfig.GetScaledToolAndUpgradePrice(price, rebirthCount)
+	if not finiteNumber(scaledPrice) or scaledPrice > MAX_CURRENCY_VALUE then
+		return nil
+	end
+	return scaledPrice
 end
 
 local function makeDefaultLevels()
@@ -72,14 +87,24 @@ end
 for _, attributeId in order do
 	table.freeze(attributes[attributeId])
 end
+for _, attributeId in persistedOrder do
+	local legacyAttribute = legacyAttributes[attributeId]
+	if legacyAttribute then
+		table.freeze(legacyAttribute)
+	end
+end
 table.freeze(attributes)
+table.freeze(legacyAttributes)
 table.freeze(order)
+table.freeze(persistedOrder)
 
 local PlayerAttributeConfig = {
 	MaximumCurrencyValue = MAX_CURRENCY_VALUE,
 	MaximumWalkSpeed = 40,
 	Order = order,
+	PersistedOrder = persistedOrder,
 	Attributes = attributes,
+	LegacyAttributes = legacyAttributes,
 	NormalizeLevel = normalizeLevel,
 	IsConfiguredMaxLevel = isConfiguredMaxLevel,
 	GetUpgradePrice = getUpgradePrice,

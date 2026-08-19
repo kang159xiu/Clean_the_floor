@@ -22,9 +22,55 @@ local function getAutomaticMode(toolId)
 end
 
 function AutomaticController:_applyVisualState()
+	if not self.UiAvailable then
+		return
+	end
 	self.OnGradient.Enabled = self.Enabled
 	self.OffGradient.Enabled = not self.Enabled
 	self.Label.Text = if self.Enabled then "ON" else "OFF"
+end
+
+function AutomaticController:_bindUi(root)
+	local button = root:FindFirstChild("Automatic")
+	local label = button and button:FindFirstChild("off")
+	local title = button and button:FindFirstChild("OP")
+	local onGradient = button and button:FindFirstChild("UIGradient1")
+	local offGradient = button and button:FindFirstChild("UIGradient2")
+
+	local invalidNodes = {}
+	if not button or not button:IsA("GuiButton") then
+		table.insert(invalidNodes, "Automatic [GuiButton]")
+	end
+	if not label or not label:IsA("TextLabel") then
+		table.insert(invalidNodes, "Automatic.off [TextLabel]")
+	end
+	if not title or not title:IsA("TextLabel") then
+		table.insert(invalidNodes, "Automatic.OP [TextLabel]")
+	end
+	if not onGradient or not onGradient:IsA("UIGradient") then
+		table.insert(invalidNodes, "Automatic.UIGradient1 [UIGradient]")
+	end
+	if not offGradient or not offGradient:IsA("UIGradient") then
+		table.insert(invalidNodes, "Automatic.UIGradient2 [UIGradient]")
+	end
+	if #invalidNodes > 0 then
+		warn("Automatic disabled because required UI is missing or invalid: " .. table.concat(invalidNodes, ", "))
+		if button and button:IsA("GuiButton") then
+			button.Active = false
+			button.Interactable = false
+		end
+		return
+	end
+
+	self.Button = button
+	self.Label = label
+	self.OnGradient = onGradient
+	self.OffGradient = offGradient
+	self.UiAvailable = true
+	self:_applyVisualState()
+	self.Button.Activated:Connect(function()
+		self:SetEnabled(not self.Enabled)
+	end)
 end
 
 function AutomaticController:_refreshMode(now, forceCleaningRefresh)
@@ -162,22 +208,11 @@ function AutomaticController:Init(remotes, toolController, poopController, hudCo
 	self.Coins = 0
 	self.ActiveYardPoopCount = 0
 	self.ActiveYardOwnerUserId = nil
+	self.UiAvailable = false
 
 	local player = Players.LocalPlayer
 	local root = player:WaitForChild("PlayerGui"):WaitForChild("GameHUD"):WaitForChild("HUDRoot")
-	self.Button = root:WaitForChild("Automatic")
-	self.Label = self.Button:WaitForChild("TextLabel")
-	self.OnGradient = self.Button:WaitForChild("UIGradient1")
-	self.OffGradient = self.Button:WaitForChild("UIGradient2")
-	assert(self.Button:IsA("GuiButton"), "GameHUD.HUDRoot.Automatic must be a GuiButton")
-	assert(self.Label:IsA("TextLabel"), "Automatic.TextLabel must be a TextLabel")
-	assert(self.OnGradient:IsA("UIGradient"), "Automatic.UIGradient1 must be a UIGradient")
-	assert(self.OffGradient:IsA("UIGradient"), "Automatic.UIGradient2 must be a UIGradient")
-
-	self:_applyVisualState()
-	self.Button.Activated:Connect(function()
-		self:SetEnabled(not self.Enabled)
-	end)
+	self:_bindUi(root)
 	hudController:ConnectSessionResetSucceeded(function()
 		self:SetEnabled(false)
 	end)

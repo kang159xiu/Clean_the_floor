@@ -51,8 +51,8 @@ $requiredSections = @($manifest.requiredSections | ForEach-Object { [string]$_ }
 if ($manifest.schemaVersion -ne 1) {
     Add-ValidationError "Unsupported feature manifest schemaVersion '$($manifest.schemaVersion)'."
 }
-if ($features.Count -ne 15) {
-    Add-ValidationError "Expected 15 active feature domains, found $($features.Count)."
+if ($features.Count -ne 16) {
+    Add-ValidationError "Expected 16 active feature domains, found $($features.Count)."
 }
 
 $featureIds = @{}

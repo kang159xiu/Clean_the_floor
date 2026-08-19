@@ -4,7 +4,7 @@
 
 ## 当前基线
 
-- 15个当前功能域已登记到[功能地图](features/README.md)。
+- 16个当前功能域已登记到[功能地图](features/README.md)。
 - 当前活动区域为Area_01～Area_08；Area_09暂停，下水道和旧HUD商品轮播已移除。
 - 主存档源码Schema、Luau文件、Remote、快照字段和永久字段数量由`scripts\verify-project.cmd`动态核验，不再手工复制到多份文档。
 - Studio精确结构继续以[Studio对象契约](05_STUDIO_OBJECT_CONTRACT.md)为准。

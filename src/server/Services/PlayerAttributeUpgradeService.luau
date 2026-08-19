@@ -64,7 +64,11 @@ function PlayerAttributeUpgradeService:Upgrade(player, attributeId)
 		if PlayerAttributeConfig.IsConfiguredMaxLevel(attributeId, currentLevel) then
 			return false, attribute.DisplayName .. " is already maxed."
 		end
-		local price = PlayerAttributeConfig.GetUpgradePrice(attributeId, currentLevel)
+		local price = PlayerAttributeConfig.GetUpgradePrice(
+			attributeId,
+			currentLevel,
+			state.RebirthCount
+		)
 		if not price or price <= 0 or price == math.huge then
 			return false, attribute.DisplayName .. " is already maxed."
 		end

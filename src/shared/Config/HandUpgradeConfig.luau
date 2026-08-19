@@ -120,8 +120,16 @@ local function getNextPrice(attributeId, currentLevel, rebirthCount)
 	if not levelConfig or not finiteNumber(levelConfig.Price) or levelConfig.Price <= 0 then
 		return nil
 	end
-	local price = RebirthConfig.GetScaledPrice(levelConfig.Price, rebirthCount)
+	local price = RebirthConfig.GetScaledToolAndUpgradePrice(levelConfig.Price, rebirthCount)
 	return finiteNumber(price) and price or nil
+end
+
+local function makeDefaultLevels()
+	local result = {}
+	for _, attributeId in order do
+		result[attributeId] = 0
+	end
+	return result
 end
 
 local function getEffectiveAttributes(levels)
@@ -155,6 +163,7 @@ local HandUpgradeConfig = {
 	IsMaxLevel = isMaxLevel,
 	GetLevelConfig = getLevelConfig,
 	GetNextPrice = getNextPrice,
+	MakeDefaultLevels = makeDefaultLevels,
 	GetEffectiveAttributes = getEffectiveAttributes,
 }
 

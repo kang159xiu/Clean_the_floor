@@ -3,6 +3,7 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 
+local CoopMatchConfig = require(ReplicatedStorage.Shared.Config.CoopMatchConfig)
 local LostItemConfig = require(ReplicatedStorage.Shared.Config.LostItemConfig)
 local ToolConfig = require(ReplicatedStorage.Shared.Config.ToolConfig)
 
@@ -38,7 +39,6 @@ local lastAcceptedMakeTimes = {}
 local lastAutomaticFailureNotificationTimes = {}
 local lastHopTimes = {}
 local pendingMakeRequests = {}
-local permissionRequestTimes = {}
 local pickupLocks = {}
 
 local function withNoCharge(message)
@@ -136,20 +136,19 @@ local function rollbackCreatedItems(item, createdItems)
 end
 
 function PoopService:_pushYard(owner)
-	for _, member in self.YardService:GetMembers(owner) do
-		if self.PlayerDataService:GetState(member) then
-			self.PlayerDataService:PushSnapshot(member)
-		end
+	if self.IsCoop then
+		self:_pushAllPlayers()
+		return
 	end
-end
-
-function PoopService:_clearEmptyYard(owner)
-	if owner and #self.YardService:GetMembers(owner) == 0 then
-		self:_detachYard(owner)
+	if owner and self.PlayerDataService:GetState(owner) then
+		self.PlayerDataService:PushSnapshot(owner)
 	end
 end
 
 function PoopService:_detachYard(owner)
+	if self.IsCoop and owner == self.CoopOwner then
+		return false
+	end
 	local yard = owner and getYard(owner, false) or nil
 	if not yard then
 		return false
@@ -168,7 +167,7 @@ function PoopService:_detachYard(owner)
 end
 
 function PoopService:GetSnapshot(player)
-	local owner = self.YardService:GetActiveOwner(player)
+	local owner = if self.IsCoop then self.CoopOwner else self.YardService:GetActiveOwner(player)
 	local yard = owner and getYard(owner, false) or nil
 	local result = {}
 	for _, item in yard and yard.Items or {} do
@@ -184,25 +183,13 @@ function PoopService:GetSnapshot(player)
 			WorldPivotCFrame = item.WorldPivotCFrame,
 		})
 	end
-	for spawnId, item in sharedItemsBySpawnId do
-		if item.TutorialPickupUserId ~= nil and (not yard or yard.Items[spawnId] ~= item) then
-			table.insert(result, {
-				SpawnId = item.SpawnId,
-				LostItemId = item.LostItemId,
-				OwnerUserId = item.SourceYardOwnerUserId,
-				CreatorUserId = item.CreatorUserId,
-				CreatorName = item.CreatorName,
-				CreatorPickupUnlockTime = item.CreatorPickupUnlockTime,
-				TutorialPickupUserId = item.TutorialPickupUserId,
-				PickupAllowed = item.TutorialPickupUserId == player.UserId,
-				WorldPivotCFrame = item.WorldPivotCFrame,
-			})
-		end
-	end
 	table.sort(result, function(left, right)
 		return left.SpawnId < right.SpawnId
 	end)
 	local lobbyResult = {}
+	if self.IsCoop then
+		return result, lobbyResult
+	end
 	for _, item in lobbyItemsBySpawnId do
 		table.insert(lobbyResult, {
 			SpawnId = item.SpawnId,
@@ -319,30 +306,18 @@ function PoopService:_getPlacementCFrame(player, lostItemId)
 end
 
 function PoopService:_getDeliveryTargets(player)
-	local activeOwner = self.YardService:GetActiveOwner(player)
+	local activeOwner = if self.IsCoop then self.CoopOwner else self.YardService:GetActiveOwner(player)
 	if not activeOwner then
 		return {}, "Yard is not ready."
 	end
-	if activeOwner ~= player then
-		local ownerState = self.PlayerDataService:GetState(activeOwner)
-		if not ownerState or ownerState.AllowGuestPoop == false then
-			return {}, "This yard does not allow guest poop."
-		end
-		return { activeOwner }
-	end
+	return { activeOwner }
+end
 
-	local targets = {}
-	for _, owner in Players:GetPlayers() do
-		local ownerState = self.PlayerDataService:GetState(owner)
-		if
-			ownerState
-			and (owner == player or ownerState.AllowGuestPoop ~= false)
-			and #self.YardService:GetMembers(owner) > 0
-		then
-			table.insert(targets, owner)
-		end
+function PoopService:_isRequestYardCurrent(player, request)
+	if self.IsCoop then
+		return request.ActiveOwner == self.CoopOwner
 	end
-	return targets
+	return request.ActiveOwner == player and self.YardService:GetActiveOwner(player) == player
 end
 
 function PoopService:_cancelPendingMake(player, expectedRequest)
@@ -379,7 +354,9 @@ function PoopService:_playPendingMakeSound(player, request)
 	if pendingMakeRequests[player] ~= request or request.Cancelled then
 		return
 	end
-	if player.Parent ~= Players or self.YardService:GetActiveOwner(player) ~= request.ActiveOwner then
+	if player.Parent ~= Players
+		or not self:_isRequestYardCurrent(player, request)
+	then
 		return
 	end
 
@@ -402,7 +379,8 @@ function PoopService:_playPendingMakeSound(player, request)
 	for _, owner in possibleTargets do
 		local yard = getYard(owner, false)
 		if not yard or getItemCount(yard) < MAXIMUM_YARD_ITEMS then
-			for _, member in self.YardService:GetMembers(owner) do
+			local members = if self.IsCoop then Players:GetPlayers() else { owner }
+			for _, member in members do
 				if not notifiedMembers[member] and self.PlayerDataService:GetState(member) then
 					notifiedMembers[member] = true
 					self.Remotes.PoopSoundTriggered:FireClient(member, eventId, placementCFrame.Position)
@@ -416,7 +394,7 @@ function PoopService:_applyPendingMakeHop(player, request)
 	if pendingMakeRequests[player] ~= request or request.Cancelled then
 		return
 	end
-	if player.Parent ~= Players or self.YardService:GetActiveOwner(player) ~= request.ActiveOwner then
+	if player.Parent ~= Players or not self:_isRequestYardCurrent(player, request) then
 		return
 	end
 
@@ -465,7 +443,7 @@ function PoopService:_completePendingMake(player, request)
 		return
 	end
 	self:_cancelPendingMake(player, request)
-	if player.Parent ~= Players or self.YardService:GetActiveOwner(player) ~= request.ActiveOwner then
+	if player.Parent ~= Players or not self:_isRequestYardCurrent(player, request) then
 		return
 	end
 
@@ -617,13 +595,6 @@ function PoopService:_completePendingMake(player, request)
 		for _, owner in targets do
 			self:_pushYard(owner)
 		end
-		if tutorialPickupOnly then
-			for _, otherPlayer in Players:GetPlayers() do
-				if self.PlayerDataService:GetState(otherPlayer) then
-					self.PlayerDataService:PushSnapshot(otherPlayer)
-				end
-			end
-		end
 	end)
 	if not pushSucceeded then
 		warn(string.format("Poop snapshot push failed for player %d: %s", player.UserId, tostring(pushError)))
@@ -632,13 +603,6 @@ function PoopService:_completePendingMake(player, request)
 				self.PlayerDataService:PushSnapshot(player)
 				for _, owner in targets do
 					self:_pushYard(owner)
-				end
-				if tutorialPickupOnly then
-					for _, otherPlayer in Players:GetPlayers() do
-						if self.PlayerDataService:GetState(otherPlayer) then
-							self.PlayerDataService:PushSnapshot(otherPlayer)
-						end
-					end
 				end
 			end)
 			if not retrySucceeded then
@@ -650,6 +614,9 @@ function PoopService:_completePendingMake(player, request)
 end
 
 function PoopService:RequestMake(player, isAutomatic)
+	if self.IsCoop and self.CoopGameplayEnabled ~= true then
+		return
+	end
 	local automaticRequest = isAutomatic == true
 	if pendingMakeRequests[player] then
 		return
@@ -679,7 +646,7 @@ function PoopService:RequestMake(player, isAutomatic)
 		return
 	end
 
-	local activeOwner = self.YardService:GetActiveOwner(player)
+	local activeOwner = if self.IsCoop then self.CoopOwner else self.YardService:GetActiveOwner(player)
 	if not activeOwner then
 		self:_notifyMakeFailure(player, MAKE_FAILURE_MESSAGE, automaticRequest)
 		return
@@ -794,7 +761,7 @@ function PoopService:RequestPickup(player, spawnId)
 		pickupLocks[spawnId] = nil
 		return
 	end
-	local owner = self.YardService:GetActiveOwner(player)
+	local owner = if self.IsCoop then self.CoopOwner else self.YardService:GetActiveOwner(player)
 	local yard = owner and getYard(owner, false) or nil
 	local item = yard and yard.Items[spawnId] or nil
 	local sharedItem = sharedItemsBySpawnId[spawnId]
@@ -869,47 +836,7 @@ function PoopService:RequestPickup(player, spawnId)
 		self:_pushYard(projection.Owner)
 	end
 	self:_notifyPoopPickedUp(player, spawnId, item.LostItemId)
-	if item.TutorialPickupUserId ~= nil then
-		for _, otherPlayer in Players:GetPlayers() do
-			if otherPlayer ~= player and self.PlayerDataService:GetState(otherPlayer) then
-				self.PlayerDataService:PushSnapshot(otherPlayer)
-			end
-		end
-	end
 	pickupLocks[spawnId] = nil
-end
-
-function PoopService:SetPermission(player, allowed)
-	if type(allowed) ~= "boolean" then
-		return false, "Invalid setting.", self.PlayerDataService:GetSnapshot(player)
-	end
-	local now = os.clock()
-	if now - (permissionRequestTimes[player] or -math.huge) < 0.25 then
-		return false, "Too fast.", self.PlayerDataService:GetSnapshot(player)
-	end
-	permissionRequestTimes[player] = now
-	if not self.PlayerDataService:SetAllowGuestPoop(player, allowed, false) then
-		return false, "Player data is not ready.", self.PlayerDataService:GetSnapshot(player)
-	end
-
-	if not allowed then
-		local yard = getYard(player, false)
-		if yard then
-			local itemsToRemove = {}
-			for _, item in yard.Items do
-				if item.CreatorUserId ~= player.UserId then
-					table.insert(itemsToRemove, item)
-				end
-			end
-			for _, item in itemsToRemove do
-				detachProjection(player, yard, item)
-				discardUnprojectedItem(item)
-			end
-			self:_pushYard(player)
-		end
-	end
-	self.PlayerDataService:PushSnapshot(player)
-	return true, allowed and "Guest poop is now allowed." or "Guest poop is now blocked.", self.PlayerDataService:GetSnapshot(player)
 end
 
 function PoopService:ResetYard(owner)
@@ -937,13 +864,6 @@ function PoopService:ResetYard(owner)
 	if self:_detachYard(owner) then
 		self:_pushYard(owner)
 	end
-	if #tutorialItems > 0 then
-		for _, player in Players:GetPlayers() do
-			if self.PlayerDataService:GetState(player) then
-				self.PlayerDataService:PushSnapshot(player)
-			end
-		end
-	end
 end
 
 function PoopService:Init(playerDataService, economyService, lostItemService, yardService, toolActionService, remotes)
@@ -955,6 +875,12 @@ function PoopService:Init(playerDataService, economyService, lostItemService, ya
 	self.Remotes = remotes
 	self.PoopCreatedHandlers = {}
 	self.PoopPickedUpHandlers = {}
+	self.IsCoop = CoopMatchConfig.IsCoop()
+	self.CoopGameplayEnabled = not self.IsCoop
+	self.CoopOwner = if self.IsCoop then Players:GetPlayers()[1] else nil
+	if self.CoopOwner then
+		getYard(self.CoopOwner, true)
+	end
 
 	self.Random = Random.new()
 	self.TemplatePivotHeights = {}
@@ -987,43 +913,30 @@ function PoopService:Init(playerDataService, economyService, lostItemService, ya
 	remotes.RequestPoopPickup.OnServerEvent:Connect(function(player, spawnId)
 		self:RequestPickup(player, spawnId)
 	end)
-	remotes.SetPoopPermission.OnServerInvoke = function(player, allowed)
-		return self:SetPermission(player, allowed)
-	end
-
-	yardService:AddYardChangedHandler(function(player, _, previousOwner)
-		self:_cancelPendingMake(player)
-		self:_clearEmptyYard(previousOwner)
+	playerDataService:AddPlayerStateReadyHandler(function(player)
+		if self.IsCoop and not self.CoopOwner then
+			self.CoopOwner = player
+			getYard(player, true)
+			self:_pushAllPlayers()
+		end
 	end)
 	Players.PlayerRemoving:Connect(function(player)
 		self:_cancelPendingMake(player)
 		lastAcceptedMakeTimes[player] = nil
 		lastAutomaticFailureNotificationTimes[player] = nil
 		lastHopTimes[player] = nil
-		permissionRequestTimes[player] = nil
 		local tutorialItems = {}
 		for _, item in sharedItemsBySpawnId do
 			if item.TutorialPickupUserId == player.UserId then
 				table.insert(tutorialItems, item)
 			end
 		end
-		local tutorialItemRemoved = #tutorialItems > 0
 		for _, item in tutorialItems do
 			destroySharedItem(item)
 		end
-		self:_detachYard(player)
-		task.defer(function()
-			for owner in yardsByOwner do
-				self:_clearEmptyYard(owner)
-			end
-			if tutorialItemRemoved then
-				for _, otherPlayer in Players:GetPlayers() do
-					if self.PlayerDataService:GetState(otherPlayer) then
-						self.PlayerDataService:PushSnapshot(otherPlayer)
-					end
-				end
-			end
-		end)
+		if not self.IsCoop then
+			self:_detachYard(player)
+		end
 	end)
 end
 
@@ -1035,6 +948,19 @@ end
 function PoopService:AddPoopPickedUpHandler(handler)
 	assert(type(handler) == "function", "Poop picked-up handler must be a function")
 	table.insert(self.PoopPickedUpHandlers, handler)
+end
+
+function PoopService:SetCoopGameplayEnabled(enabled)
+	if not self.IsCoop then
+		return false
+	end
+	self.CoopGameplayEnabled = enabled == true
+	if not self.CoopGameplayEnabled then
+		for player in pendingMakeRequests do
+			self:_cancelPendingMake(player)
+		end
+	end
+	return true
 end
 
 return PoopService

@@ -3,6 +3,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
+local CoopMatchConfig = require(ReplicatedStorage.Shared.Config.CoopMatchConfig)
 local LeafConfig = require(ReplicatedStorage.Shared.Config.LeafConfig)
 local LeafVisibilityConfig = require(ReplicatedStorage.Shared.Config.LeafVisibilityConfig)
 local RegionConfig = require(ReplicatedStorage.Shared.Config.RegionConfig)
@@ -74,8 +75,9 @@ local function streamingCellKey(cellX, cellZ)
 	return tostring(cellX) .. ":" .. tostring(cellZ)
 end
 
-local function buildStreamingCellSet(origin, radius)
+local function buildStreamingCells(origin, radius)
 	local cells = {}
+	local orderedCells = {}
 	local radiusSquared = radius * radius
 	local minimumCellX = math.floor((origin.X - radius) / STREAMING_CELL_SIZE)
 	local maximumCellX = math.floor((origin.X + radius) / STREAMING_CELL_SIZE)
@@ -92,11 +94,26 @@ local function buildStreamingCellSet(origin, radius)
 			local offsetX = closestX - origin.X
 			local offsetZ = closestZ - origin.Z
 			if offsetX * offsetX + offsetZ * offsetZ <= radiusSquared then
-				cells[streamingCellKey(cellX, cellZ)] = true
+				local key = streamingCellKey(cellX, cellZ)
+				cells[key] = true
+				local centerX = (cellX + 0.5) * STREAMING_CELL_SIZE
+				local centerZ = (cellZ + 0.5) * STREAMING_CELL_SIZE
+				local centerOffsetX = centerX - origin.X
+				local centerOffsetZ = centerZ - origin.Z
+				table.insert(orderedCells, {
+					Key = key,
+					DistanceSquared = centerOffsetX * centerOffsetX + centerOffsetZ * centerOffsetZ,
+				})
 			end
 		end
 	end
-	return cells
+	table.sort(orderedCells, function(left, right)
+		if left.DistanceSquared == right.DistanceSquared then
+			return left.Key < right.Key
+		end
+		return left.DistanceSquared < right.DistanceSquared
+	end)
+	return cells, orderedCells
 end
 
 local function isFiniteVector3(value)
@@ -142,14 +159,21 @@ local function clampPredictionToStopPoint(samplePosition, displacement, stopPoin
 	return displacement
 end
 
-function YardLeafController:Init(remotes)
+function YardLeafController:Init(remotes, performanceController)
 	self.Remotes = remotes
+	self.PerformanceController = performanceController
 	self.Player = Players.LocalPlayer
+	self.IsCoop = CoopMatchConfig.IsCoop()
+	self.ExpectedCoopScopeId = if self.IsCoop and not RunService:IsStudio()
+		then tostring(game.JobId)
+		else nil
 	self.ModelFolder = ReplicatedStorage:WaitForChild("Model")
 	local highlightContainer = ReplicatedStorage:WaitForChild("miaobian")
 	self.FinalGuidanceHighlightTemplate = highlightContainer:WaitForChild("Highlight02")
 	assert(self.FinalGuidanceHighlightTemplate:IsA("Highlight"), "ReplicatedStorage.miaobian.Highlight02 must be a Highlight")
 	self.ActiveOwnerUserId = nil
+	self.ActiveScopeKind = nil
+	self.ActiveScopeId = nil
 	self.SnapshotSerial = nil
 	self.SnapshotLoading = false
 	self.Descriptors = {}
@@ -157,6 +181,9 @@ function YardLeafController:Init(remotes)
 	self.DescriptorCellKeys = {}
 	self.DescriptorIdsByArea = {}
 	self.Models = {}
+	self.VisibleModels = {}
+	self.VisibleModelCount = 0
+	self.MaximumVisibleModelCount = math.max(1, performanceController:GetLeafModelLimit())
 	self.LoadedModelBuckets = {}
 	self.LoadedModelCellKeys = {}
 	self.Folders = {}
@@ -174,6 +201,7 @@ function YardLeafController:Init(remotes)
 	self.CreateQueue = {}
 	self.CreateQueueHead = 1
 	self.QueuedIds = {}
+	self.QueuedCreateCount = 0
 	self.RecycleQueue = {}
 	self.RecycleQueueHead = 1
 	self.RecycleQueuedIds = {}
@@ -230,6 +258,9 @@ function YardLeafController:Init(remotes)
 	remotes.YardLeafDelta.OnClientEvent:Connect(function(packet)
 		self:_handleDeltaPacket(packet)
 	end)
+	performanceController:ConnectTierChanged(function(_, leafModelLimit)
+		self:_setMaximumVisibleModelCount(leafModelLimit)
+	end)
 	remotes.StateSnapshotStore:Connect(function(snapshot)
 		local harvestRadius = math.max(0, tonumber(snapshot.HarvestRadius) or 0)
 		local harvestForwardOffset = math.max(0, tonumber(snapshot.HarvestForwardOffset) or 0)
@@ -249,13 +280,15 @@ function YardLeafController:Init(remotes)
 			self.StreamingHideDistance = nextHideDistance
 			self.StreamingDirty = true
 		end
-		local ownerUserId = tonumber(snapshot.ActiveYardOwnerUserId)
-		if ownerUserId and ownerUserId ~= self.ActiveOwnerUserId then
-			self.ActiveOwnerUserId = ownerUserId
-			self.SnapshotLoading = false
-			self.SnapshotSerial = nil
-			self:_clearWorld()
-			remotes.YardLeafSnapshot:FireServer("Request")
+		if not self.IsCoop then
+			local ownerUserId = tonumber(snapshot.ActiveYardOwnerUserId)
+			if ownerUserId and ownerUserId ~= self.ActiveOwnerUserId then
+				self.ActiveOwnerUserId = ownerUserId
+				self.SnapshotLoading = false
+				self.SnapshotSerial = nil
+				self:_clearWorld()
+				remotes.YardLeafSnapshot:FireServer("Request")
+			end
 		end
 		self.CurrentAreaId = type(snapshot.CurrentAreaId) == "string"
 			and snapshot.CurrentAreaId
@@ -327,6 +360,52 @@ end
 
 function YardLeafController:IsFinalGuidanceActive()
 	return self.FinalGuidanceActive == true
+end
+
+function YardLeafController:GetNearestGuidancePosition(areaId, originPosition)
+	if
+		type(areaId) ~= "string"
+		or typeof(originPosition) ~= "Vector3"
+		or self.SnapshotLoading
+	then
+		return nil
+	end
+	local areaState = self.AreaStates[areaId]
+	local areaLeafIds = self.DescriptorIdsByArea[areaId]
+	if
+		not areaState
+		or areaState.GameplayReady ~= true
+		or areaState.PreviewOnly == true
+		or areaState.Completed == true
+		or not areaLeafIds
+	then
+		return nil
+	end
+
+	local nearestPosition = nil
+	local nearestLeafId = nil
+	local nearestDistanceSquared = math.huge
+	local serverNow = Workspace:GetServerTimeNow()
+	for leafId in areaLeafIds do
+		local descriptor = self.Descriptors[leafId]
+		if descriptor and descriptor.AreaId == areaId then
+			local bounds = self:_predictDescriptorBounds(descriptor, serverNow)
+			local position = bounds.Position
+			local offsetX = position.X - originPosition.X
+			local offsetZ = position.Z - originPosition.Z
+			local distanceSquared = offsetX * offsetX + offsetZ * offsetZ
+			if
+				distanceSquared < nearestDistanceSquared
+				or distanceSquared == nearestDistanceSquared
+					and (nearestLeafId == nil or leafId < nearestLeafId)
+			then
+				nearestPosition = position
+				nearestLeafId = leafId
+				nearestDistanceSquared = distanceSquared
+			end
+		end
+	end
+	return nearestPosition
 end
 
 function YardLeafController:AddFinalGuidanceChangedHandler(handler)
@@ -935,6 +1014,23 @@ function YardLeafController:_positionModel(model, descriptor, boundingCFrame)
 	self:_publishVisualBounds(model, descriptor, targetBounds)
 end
 
+function YardLeafController:_setModelVisible(model, visible)
+	local wasVisible = self.VisibleModels[model] == true
+	if visible == wasVisible then
+		return
+	end
+	if visible then
+		self.VisibleModels[model] = true
+		self.VisibleModelCount += 1
+	else
+		self.VisibleModels[model] = nil
+		self.VisibleModelCount = math.max(0, self.VisibleModelCount - 1)
+		if self.VisibleModelCount + self.QueuedCreateCount < self.MaximumVisibleModelCount then
+			self.StreamingDirty = true
+		end
+	end
+end
+
 function YardLeafController:_takeModel(descriptor)
 	local pool = self.ModelPools[descriptor.LeafType]
 	local model = table.remove(pool)
@@ -948,6 +1044,7 @@ function YardLeafController:_takeModel(descriptor)
 	local initialBounds = self:_predictDescriptorBounds(descriptor, Workspace:GetServerTimeNow())
 	self:_positionModel(model, descriptor, initialBounds)
 	model.Parent = self:_ensureFolder(descriptor.AreaId)
+	self:_setModelVisible(model, true)
 	if descriptor.IsMoving == true then
 		self:_scheduleMotion(descriptor, model, true)
 	end
@@ -959,6 +1056,7 @@ function YardLeafController:_recycleModel(model)
 	if self.AnimatingModels[model] then
 		return
 	end
+	self:_setModelVisible(model, false)
 	local leafId = model:GetAttribute("LeafId")
 	if type(leafId) == "string" then
 		self.MotionStates[leafId] = nil
@@ -983,6 +1081,9 @@ function YardLeafController:_recycleModel(model)
 		self.PooledModelCount += 1
 	end
 	self:_startPoolMaintenance()
+	if self.VisibleModelCount + self.QueuedCreateCount < self.MaximumVisibleModelCount then
+		self.StreamingDirty = true
+	end
 end
 
 function YardLeafController:_clearWorld()
@@ -1006,6 +1107,7 @@ function YardLeafController:_clearWorld()
 	table.clear(self.CreateQueue)
 	self.CreateQueueHead = 1
 	table.clear(self.QueuedIds)
+	self.QueuedCreateCount = 0
 	table.clear(self.RecycleQueue)
 	self.RecycleQueueHead = 1
 	table.clear(self.RecycleQueuedIds)
@@ -1014,6 +1116,8 @@ function YardLeafController:_clearWorld()
 		self.Models[leafId] = nil
 		self:_recycleModel(model)
 	end
+	table.clear(self.VisibleModels)
+	self.VisibleModelCount = 0
 	self:_setActivePoolLeafTypes({})
 	table.clear(self.LoadedModelBuckets)
 	table.clear(self.LoadedModelCellKeys)
@@ -1043,6 +1147,26 @@ function YardLeafController:_getPlayerRootPosition()
 		return nil
 	end
 	return rootPart.Position
+end
+
+function YardLeafController:_clearCreateQueue()
+	table.clear(self.CreateQueue)
+	self.CreateQueueHead = 1
+	table.clear(self.QueuedIds)
+	self.QueuedCreateCount = 0
+end
+
+function YardLeafController:_setMaximumVisibleModelCount(value)
+	local nextLimit = math.max(1, math.floor(tonumber(value) or self.MaximumVisibleModelCount))
+	if nextLimit == self.MaximumVisibleModelCount then
+		return
+	end
+	local previousLimit = self.MaximumVisibleModelCount
+	self.MaximumVisibleModelCount = nextLimit
+	if nextLimit < previousLimit then
+		self:_clearCreateQueue()
+	end
+	self.StreamingDirty = true
 end
 
 function YardLeafController:_isDescriptorInStreamingCells(descriptor, cells)
@@ -1146,10 +1270,15 @@ end
 
 function YardLeafController:_queueCreate(leafId)
 	if self.Models[leafId] or self.QueuedIds[leafId] or not self.Descriptors[leafId] then
-		return
+		return false
+	end
+	if self.VisibleModelCount + self.QueuedCreateCount >= self.MaximumVisibleModelCount then
+		return false
 	end
 	self.QueuedIds[leafId] = true
+	self.QueuedCreateCount += 1
 	table.insert(self.CreateQueue, leafId)
+	return true
 end
 
 function YardLeafController:_processCreateQueue()
@@ -1165,11 +1294,13 @@ function YardLeafController:_processCreateQueue()
 		local leafId = self.CreateQueue[self.CreateQueueHead]
 		self.CreateQueueHead += 1
 		self.QueuedIds[leafId] = nil
+		self.QueuedCreateCount = math.max(0, self.QueuedCreateCount - 1)
 		local descriptor = self.Descriptors[leafId]
 		if
 			descriptor
 			and not self.Models[leafId]
 			and self:_shouldLoadDescriptor(descriptor)
+			and self.VisibleModelCount < self.MaximumVisibleModelCount
 		then
 			local model = self:_takeModel(descriptor)
 			self.Models[leafId] = model
@@ -1181,6 +1312,9 @@ function YardLeafController:_processCreateQueue()
 	if self.CreateQueueHead > #self.CreateQueue then
 		table.clear(self.CreateQueue)
 		self.CreateQueueHead = 1
+		if self.VisibleModelCount + self.QueuedCreateCount < self.MaximumVisibleModelCount then
+			self.StreamingDirty = true
+		end
 	end
 	debug.profileend()
 end
@@ -1249,18 +1383,8 @@ function YardLeafController:_refreshStreaming()
 		return
 	end
 	debug.profilebegin("LeafStreamingCellDiff")
-	local nextLoadCells = buildStreamingCellSet(rootPosition, self.StreamingLoadDistance)
-	local nextHideCells = buildStreamingCellSet(rootPosition, self.StreamingHideDistance)
-	for key in nextLoadCells do
-		if not self.ActiveStreamingLoadCells[key] then
-			local bucket = self.DescriptorBuckets[key]
-			if bucket then
-				for leafId in bucket do
-					self:_queueCreate(leafId)
-				end
-			end
-		end
-	end
+	local nextLoadCells, orderedLoadCells = buildStreamingCells(rootPosition, self.StreamingLoadDistance)
+	local nextHideCells = buildStreamingCells(rootPosition, self.StreamingHideDistance)
 	for key in self.ActiveStreamingHideCells do
 		if not nextHideCells[key] then
 			local bucket = self.LoadedModelBuckets[key]
@@ -1276,6 +1400,30 @@ function YardLeafController:_refreshStreaming()
 	end
 	self.ActiveStreamingLoadCells = nextLoadCells
 	self.ActiveStreamingHideCells = nextHideCells
+	if self.VisibleModelCount <= self.MaximumVisibleModelCount then
+		for leafId in self.FinalGuidanceTargetSet do
+			local descriptor = self.Descriptors[leafId]
+			if descriptor and self:_shouldLoadDescriptor(descriptor) then
+				self:_queueCreate(leafId)
+			end
+		end
+		if self.VisibleModelCount + self.QueuedCreateCount < self.MaximumVisibleModelCount then
+			for _, cell in orderedLoadCells do
+				local bucket = self.DescriptorBuckets[cell.Key]
+				if bucket then
+					for leafId in bucket do
+						self:_queueCreate(leafId)
+						if self.VisibleModelCount + self.QueuedCreateCount >= self.MaximumVisibleModelCount then
+							break
+						end
+					end
+				end
+				if self.VisibleModelCount + self.QueuedCreateCount >= self.MaximumVisibleModelCount then
+					break
+				end
+			end
+		end
+	end
 	self.StreamingDirty = false
 	self.LastStreamingPlayerCellX, self.LastStreamingPlayerCellZ = streamingCellCoordinates(rootPosition)
 	if self.FinalGuidanceActive then
@@ -1403,14 +1551,31 @@ function YardLeafController:_handleSnapshotPacket(packet)
 	end
 	local ownerUserId = tonumber(packet.YardOwnerUserId)
 	local serial = tonumber(packet.Serial)
-	if not ownerUserId or not serial then
+	local scopeKind = if packet.ScopeKind == "Coop" then "Coop" else "Yard"
+	local scopeId = type(packet.ScopeId) == "string" and packet.ScopeId or tostring(ownerUserId)
+	if not ownerUserId or not serial or #scopeId > 128 then
+		return
+	end
+	if self.IsCoop then
+		if scopeKind ~= "Coop"
+			or self.ExpectedCoopScopeId ~= nil and scopeId ~= self.ExpectedCoopScopeId
+		then
+			return
+		end
+	elseif scopeKind ~= "Yard" or scopeId ~= tostring(ownerUserId) then
+		return
+	end
+	if self.IsCoop
+		and self.ExpectedCoopScopeId == nil
+		and self.ActiveScopeKind == "Coop"
+		and scopeId ~= self.ActiveScopeId
+	then
 		return
 	end
 	if packet.Kind == "Begin" then
-		if self.ActiveOwnerUserId and ownerUserId ~= self.ActiveOwnerUserId then
-			return
-		end
 		self.ActiveOwnerUserId = ownerUserId
+		self.ActiveScopeKind = scopeKind
+		self.ActiveScopeId = scopeId
 		self.SnapshotSerial = serial
 		self.SnapshotLoading = true
 		self:_clearWorld()
@@ -1422,7 +1587,11 @@ function YardLeafController:_handleSnapshotPacket(packet)
 		self:_refreshPoolTargetsFromAreaStates()
 		return
 	end
-	if ownerUserId ~= self.ActiveOwnerUserId or serial ~= self.SnapshotSerial then
+	if ownerUserId ~= self.ActiveOwnerUserId
+		or scopeKind ~= self.ActiveScopeKind
+		or scopeId ~= self.ActiveScopeId
+		or serial ~= self.SnapshotSerial
+	then
 		return
 	end
 	if packet.Kind == "Chunk" and self.SnapshotLoading then
@@ -1547,7 +1716,25 @@ function YardLeafController:_applyDelta(packet)
 end
 
 function YardLeafController:_handleDeltaPacket(packet)
-	if type(packet) ~= "table" or tonumber(packet.YardOwnerUserId) ~= self.ActiveOwnerUserId then
+	if type(packet) ~= "table" then
+		return
+	end
+	local ownerUserId = tonumber(packet.YardOwnerUserId)
+	local scopeKind = if packet.ScopeKind == "Coop" then "Coop" else "Yard"
+	local scopeId = type(packet.ScopeId) == "string" and packet.ScopeId or tostring(ownerUserId)
+	if self.IsCoop then
+		if scopeKind ~= "Coop"
+			or self.ExpectedCoopScopeId ~= nil and scopeId ~= self.ExpectedCoopScopeId
+		then
+			return
+		end
+	elseif scopeKind ~= "Yard" or scopeId ~= tostring(ownerUserId) then
+		return
+	end
+	if ownerUserId ~= self.ActiveOwnerUserId
+		or scopeKind ~= self.ActiveScopeKind
+		or scopeId ~= self.ActiveScopeId
+	then
 		return
 	end
 	if self.SnapshotLoading then

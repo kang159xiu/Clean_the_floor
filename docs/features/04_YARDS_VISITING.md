@@ -1,61 +1,63 @@
-# 庭院访问、邀请与返回
+# 个人庭院、官方邀请与返回出生点
 
 ## 目标与边界
 
-管理玩家自己的庭院、好友访问、邀请响应、访客列表、允许制造大便权限，以及返回出生点/大厅时的上下文切换。
+管理普通模式下玩家自己的庭院上下文、Roblox官方体验邀请入口，以及把当前角色返回出生点。它不再提供好友庭院访问、访客权限或跨庭院共享；Coop共享世界由合作功能独立拥有。
 
 ## 玩家流程
 
-玩家可邀请在线好友进入自己的庭院；访客接受后切换到主人庭院，看到主人权威进度与共享世界对象，随后可退出访问或返回大厅。主人可以控制访客是否可制造大便。
+大厅玩家点击`GameHUD.Frame.invite`后，客户端先确认当前平台可发送邀请，再打开Roblox官方邀请界面。被邀请好友从体验正常入口加入，始终进入自己的庭院。大厅和合作副本中的玩家点击`fanhui.Lobby`都只把当前角色移动回本Place的出生点，不改变存档、庭院或合作局状态。
 
 ## 服务端权威
 
-`YardService`拥有当前庭院映射，`YardInviteService`校验邀请、过期、双方状态和奖励，`PlayerAreaService`维护玩家所处区域，`ReturnToSpawnService`负责安全结束当前交互并传送。
+`YardService`只为已加载玩家返回本人作为活动庭院Owner，`PlayerAreaService`维护玩家所处区域，`ReturnToSpawnService`在停止清扫和工具动作后把角色安全移动到唯一有效出生点。官方邀请属于Roblox原生客户端界面，不授予任何庭院或合作权限。
 
 ## 客户端表现
 
-`YardUIController`管理邀请和访问界面，`VisitorBillboardController`显示访问者信息，`LobbyReturnController`在返回前停止工具、Automatic和局部HUD状态。
+`OfficialInviteController`只在大厅启用`Frame.invite`，使用`CanSendGameInviteAsync()`、请求锁和`GameInvitePromptClosed`管理原生弹窗；Coop中隐藏按钮。`LobbyReturnController`在大厅与Coop都显示`fanhui.Lobby`，并在返回当前Place出生点前停止手动工具输入。旧`GameHUD.invite/accept`及访客模板可留在Studio，但运行时代码不查找它们。
 
 ## 数据流
 
-邀请Remote -> 服务端建立待邀请 -> 接受后切换庭院上下文 -> `PlayerDataService`快照使用主人区域状态 -> 叶子/大便增量按目标庭院同步 -> 退出时恢复自己庭院。
+大厅邀请按钮 -> Roblox `SocialService`能力检查 -> 官方邀请界面；好友接受后按平台正常加入流程进入体验。玩家状态Ready -> `YardService`固定Owner为本人 -> 快照、叶子、便便和失物按本人UserId隔离。返回按钮 -> `RequestReturnToSpawn` -> 服务端停止输入并移动角色。
 
 ## 配置
 
-庭院本身无独立共享Config；区域过滤继续读取`RegionConfig`，奖励和权限由相关服务常量与存档字段约束。
+庭院本身无独立共享Config；大厅/Coop Place分流读取`CoopMatchConfig`。官方邀请不设置`ExperienceInviteOptions`或LaunchData。
 
 ## Remote
 
-拥有`SendYardInvite`、`RespondYardInvite`、`YardInviteReceived`、`EnterYard`、`LeaveVisitedYard`、`SetPoopPermission`和`RequestReturnToSpawn`。所有位置和权限变化由服务端确认。
+`RequestReturnToSpawn`由客户端请求、服务端校验角色与出生点并执行。官方邀请直接使用`SocialService`，不经过自定义Remote。旧`SendYardInvite/RespondYardInvite/YardInviteReceived/EnterYard/LeaveVisitedYard/SetPoopPermission`已退休。
 
 ## 快照字段
 
-`AllowGuestPoop`、`HomeYardProgress`、`ActiveYardOwnerUserId`、`ActiveYardOwnerName`、`IsVisitingYard`、`ActiveYardVisitors`。
+`HomeYardProgress`、`ActiveYardOwnerUserId`；后者在普通模式始终等于当前玩家UserId。
 
 ## 永久字段与重置
 
-`AllowGuestPoop`和`YardProgress`永久保存。访问关系和当前被访问庭院是会话状态；离服、服务器关闭和完整清档会解除，Rebirth重建自己的本轮庭院进度。
+`YardProgress`永久保存；Rebirth按区域功能规则重建本轮进度。Schema 34退休`AllowGuestPoop`，旧值加载时忽略并在下次保存清除。不存在持久或会话访客关系。
 
 ## Studio契约
 
-庭院和区域入口归入`Workspace区域结构`，访问与邀请UI归入`StarterGui契约`。`Workspace.Yards`和Lobby出生点的精确现场结构当前标记待Studio核验。
+区域入口归入`Workspace区域结构`；官方邀请按钮、可选旧UI和返回按钮见`StarterGui契约`。本次不修改Studio实例。
 
 ## 依赖功能
 
-依赖`platform-state`和`area-progression-rebirth`；叶子、大便、好友奖励、失物和工具输入都读取当前庭院上下文。
+依赖`platform-state`和`area-progression-rebirth`；叶子、大便、失物和工具输入读取个人庭院上下文，Coop使用自己的共享作用域。
 
 ## 不变量
 
-- 访客不能修改自己的区域进度来替代主人进度。
-- 任何庭院切换都必须停止旧工具输入和清理旧客户端投影。
-- 邀请重复响应、过期或任一方离服必须安全失败。
+- 普通模式的活动庭院Owner必须始终为玩家本人，任何好友加入都不能切换Owner或共享区域进度。
+- 官方邀请不得携带庭院、队伍或副本LaunchData；Coop必须隐藏入口。
+- 原生邀请请求同时最多一个，关闭、异常或超时恢复后可再次点击。
+- 返回出生点必须停止当前清扫与工具动作，但不能重建角色、重置庭院或改变存档。
 
 ## 修改影响
 
-改变庭院上下文接口会影响叶子描述、大便共享、失物投影、回收结算、好友奖励和所有当前区域HUD。新增庭院世界对象必须说明主人/访客可见性。
+改变个人庭院上下文会影响叶子描述、大便、失物、回收来源与当前区域HUD。修改邀请入口需同时回归大厅/Coop Place分流和旧UI缺失兼容。
 
 ## 最小回归清单
 
-- [ ] 邀请、接受、拒绝、过期和离服路径无重复访问。
-- [ ] 访客看到主人叶子、区域和大便状态，自己的存档不被覆盖。
-- [ ] 退出访问和返回大厅后工具、相机、投影及HUD恢复。
+- [ ] 大厅点击`Frame.invite`只打开一次官方邀请界面，关闭后可再次点击；不可用时显示英文提示并恢复按钮。
+- [ ] Coop隐藏邀请按钮；保留或删除旧庭院邀请UI/访客模板均不影响Bootstrap。
+- [ ] 两名普通玩家各自只看到、收取和结算自己的庭院叶子、便便与失物，`ActiveYardOwnerUserId`始终为本人。
+- [ ] 大厅与Coop的`fanhui.Lobby`都停止输入并正确移动到当前Place出生点，不修改庭院/合作进度、金币、背包或库存，也不触发跨Place返回。

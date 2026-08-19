@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "mainDataSchemaVersion": 33,
+  "mainDataSchemaVersion": 35,
   "requiredSections": [
     "目标与边界",
     "玩家流程",
@@ -24,6 +24,7 @@
       "status": "active",
       "document": "docs/features/01_PLATFORM_STATE.md",
       "primarySources": [
+		"src/client/Controllers/PerformanceController.luau",
         "src/client/init.client.luau",
         "src/client/StateSnapshotStore.luau",
         "src/server/init.server.luau",
@@ -37,9 +38,9 @@
       "persistentFields": [],
       "studioContractSections": [],
       "studioPaths": ["game.ReplicatedStorage.Remotes"],
-      "keywords": ["bootstrap", "Init", "StateSnapshotStore", "启动", "状态同步"],
+      "keywords": ["bootstrap", "Init", "StateSnapshotStore", "PerformanceController", "性能档位", "启动", "状态同步"],
       "dependencies": [],
-      "regressionChecks": ["服务端与客户端Bootstrap全部完成", "StateSnapshotStore只保留最新权威快照"]
+      "regressionChecks": ["服务端与客户端Bootstrap全部完成", "StateSnapshotStore只保留最新权威快照", "客户端性能档位不改变权威状态"]
     },
     {
       "id": "persistence-reset",
@@ -82,57 +83,55 @@
         "src/shared/Config/RegionConfig.luau"
       ],
       "relatedSources": [
+		"src/client/Controllers/AreaCoinResetController.luau",
         "src/server/Services/LeafService.luau",
         "src/server/Services/PlayerDataService.luau",
         "src/server/Services/PoopService.luau"
       ],
-      "remotes": ["AreaCompletionNotice", "RequestAreaUnlock", "RequestRebirth"],
+      "remotes": ["AreaCompletionNotice", "AreaDoorCoinShortageNotice", "RequestAreaUnlock", "RequestRebirth"],
       "snapshotFields": [
         "UnlockedAreas", "AreaId", "CurrentAreaId", "RebirthLeafValueMultiplier", "RebirthCount",
-        "RebirthEligible", "RainbowPoopFoundCount", "RainbowPoopRequiredCount", "LeafCountMultiplier"
+        "RebirthEligible", "RebirthRequiredCoins", "RainbowPoopFoundCount", "RainbowPoopRequiredCount", "LeafCountMultiplier"
       ],
       "persistentFields": ["UnlockedAreas", "ProcessedSkipRebirthReceiptIds", "RebirthCount", "RainbowPoopFoundCount"],
       "studioContractSections": ["Workspace区域结构", "区域门", "StarterGui契约"],
       "studioPaths": [
         "game.Workspace.Area_01", "game.Workspace.AirWall", "game.StarterGui.GameHUD.Frame.Rebirth",
-        "game.Workspace.Area_01.Door.Door02.Door01.SurfaceGui.rebirth.ImageLabel.x1"
+        "game.Workspace.Area_01.Door.Door02.Door01.SurfaceGui.rebirth.ImageLabel.x1",
+		"game.Workspace.Function.Reset", "game.StarterGui.GameHUD.chongshengqueren.monexplain",
+		"game.StarterGui.GameHUD.chongshengqueren.explain",
+		"game.StarterGui.GameHUD.chongshengqueren.jindu.Name",
+		"game.StarterGui.GameHUD.chongshengqueren.jindu.BarBackground.Fill",
+		"game.ReplicatedStorage.tishi", "game.SoundService.Recycle"
       ],
-      "keywords": ["Area_01", "Area_08", "door", "AreaUnlockConfig", "CoinSpendEvent", "AirWall", "Rebirth", "区域", "金币门价", "空气墙", "重生"],
+      "keywords": ["Area_01", "Area_08", "door", "AreaUnlockConfig", "CoinSpendEvent", "AirWall", "Rebirth", "RebirthRequiredCoins", "Money 500", "区域", "金币门价", "金币重生", "空气墙", "重生后重新购买"],
       "dependencies": ["persistence-reset", "leaves-cleaning", "poop-lobby"],
-      "regressionChecks": ["区域按顺序碰门解锁且服务端裁决", "空气墙按本地快照隔离", "普通与SKIP重生共用同一重置边界"]
+      "regressionChecks": ["Area01到目标前一区正式清完后才能顺序付费解锁", "门价按2的重生次数幂且购买消费与世界动画不重复结算", "重生门槛按500乘2.5的重生次数幂", "重生后旧门重新锁定并按新次数涨价", "重生价值倍率始终等于次数加1", "金币或彩虹便便任一满足即可重生", "空气墙按本地快照隔离", "普通与SKIP重生共用同一重置边界"]
     },
     {
       "id": "yards-visiting",
-      "title": "庭院访问、邀请与返回",
+      "title": "个人庭院、官方邀请与返回出生点",
       "status": "active",
       "document": "docs/features/04_YARDS_VISITING.md",
       "primarySources": [
         "src/client/Controllers/LobbyReturnController.luau",
-        "src/client/Controllers/VisitorBillboardController.luau",
-        "src/client/Controllers/YardUIController.luau",
+        "src/client/Controllers/OfficialInviteController.luau",
         "src/server/Services/PlayerAreaService.luau",
         "src/server/Services/ReturnToSpawnService.luau",
-        "src/server/Services/YardInviteService.luau",
         "src/server/Services/YardService.luau"
       ],
       "relatedSources": [
         "src/client/Controllers/YardLeafController.luau",
         "src/server/Services/PoopService.luau"
       ],
-      "remotes": [
-        "EnterYard", "LeaveVisitedYard", "RequestReturnToSpawn", "RespondYardInvite", "SendYardInvite",
-        "SetPoopPermission", "YardInviteReceived"
-      ],
-      "snapshotFields": [
-        "AllowGuestPoop", "HomeYardProgress", "ActiveYardOwnerUserId", "ActiveYardOwnerName",
-        "IsVisitingYard", "ActiveYardVisitors"
-      ],
-      "persistentFields": ["AllowGuestPoop", "YardProgress"],
+      "remotes": ["RequestReturnToSpawn"],
+      "snapshotFields": ["HomeYardProgress", "ActiveYardOwnerUserId"],
+      "persistentFields": ["YardProgress"],
       "studioContractSections": ["Workspace区域结构", "StarterGui契约"],
-      "studioPaths": ["game.Workspace.Yards", "game.Workspace.LobbySpawn", "game.StarterGui.GameHUD"],
-      "keywords": ["yard", "invite", "visitor", "庭院", "邀请", "访问", "返回大厅"],
+      "studioPaths": ["game.Workspace.SpawnLocation", "game.StarterGui.GameHUD.Frame.invite", "game.StarterGui.GameHUD.fanhui.Lobby"],
+      "keywords": ["yard", "SocialService", "PromptGameInvite", "庭院", "官方邀请", "返回出生点"],
       "dependencies": ["platform-state", "area-progression-rebirth"],
-      "regressionChecks": ["主人和访客看到同一庭院权威状态", "退出访问和返回大厅停止当前工具输入", "邀请过期与重复响应安全失败"]
+      "regressionChecks": ["每名玩家只结算自己的普通庭院", "官方邀请关闭后可再次打开且Coop隐藏入口", "返回出生点停止当前工具输入"]
     },
     {
       "id": "leaves-cleaning",
@@ -140,7 +139,9 @@
       "status": "active",
       "document": "docs/features/05_LEAVES_CLEANING.md",
       "primarySources": [
+		"src/client/Controllers/AreaCoinResetController.luau",
         "src/client/Controllers/HarvestRangeController.luau",
+		"src/client/Controllers/LeafGainHintController.luau",
         "src/client/Controllers/YardLeafController.luau",
 		"src/server/Services/AreaCoinResetService.luau",
         "src/server/Services/LeafService.luau",
@@ -149,30 +150,34 @@
         "src/shared/HarvestGeometry.luau"
       ],
       "relatedSources": [
+		"src/client/Controllers/HUDController.luau",
+		"src/client/Controllers/PerformanceController.luau",
         "src/client/Controllers/ToolController.luau",
         "src/server/Services/BagService.luau",
         "src/server/Services/CleaningToolService.luau"
       ],
       "remotes": [
-        "LeafCollected", "LeafPickupBatch", "SetLeafPickupActive", "UpdateHarvestAim", "YardLeafDelta", "YardLeafSnapshot"
+        "AreaCoinResetPrompted", "LeafCollected", "LeafPickupBatch", "RequestAreaCoinReset",
+        "SetLeafPickupActive", "UpdateHarvestAim", "YardLeafDelta", "YardLeafSnapshot"
       ],
       "snapshotFields": [
         "AreaClearedValue", "AreaTotalValue", "AreaProgress", "AreaCollectedLeafCount", "AreaTotalLeafCount",
-        "LeafValueMultiplier", "PersonalLeafValueMultiplier"
+        "AreaCoinResetEligible", "AreaCoinResetRequirementText", "LeafValueMultiplier", "PersonalLeafValueMultiplier"
       ],
       "persistentFields": [],
-      "studioContractSections": ["Workspace区域结构", "ReplicatedStorage资源", "叶子模板", "收割范围与描边"],
+      "studioContractSections": ["Workspace区域结构", "ReplicatedStorage资源", "叶子模板", "收割范围与描边", "StarterGui契约"],
       "studioPaths": [
-		"game.Workspace.Area_01", "game.Workspace.Function.Reset.ProximityPrompt", "game.Workspace[\"大厅装扮\"].ground",
+		"game.Workspace.Area_01", "game.Workspace.Function.Reset.ProximityPrompt", "game.StarterGui.GameHUD.Reset",
+		"game.Workspace[\"大厅装扮\"].ground",
         "game.Workspace[\"大厅装扮\"].GeneratedLeaves", "game.ReplicatedStorage.Leaf",
-        "game.ReplicatedStorage.miaobian"
+        "game.ReplicatedStorage.miaobian", "game.ReplicatedStorage.tishi"
       ],
       "keywords": [
         "LeafService", "LeafConfig.Lobby", "Workspace.大厅装扮.ground", "YardLeaf", "Streaming",
-        "Lobby", "leaf", "叶子", "清扫", "大厅", "空间网格"
+        "LeafGainHint", "tishi", "Lobby", "leaf", "叶子", "清扫", "大厅", "空间网格"
       ],
       "dependencies": ["area-progression-rebirth", "tools-upgrades", "bags-capacity"],
-      "regressionChecks": ["服务端权威叶片数与客户端描述一致", "Streaming加载回收不改变逻辑进度", "预览叶片不可收取且区域完成数量准确"]
+      "regressionChecks": ["服务端权威叶片数与客户端描述一致", "普通区域补充覆盖全部地面且不集中在剩余网格", "补充不超过20000活动上限或区域实际剩余数", "Low/Medium/High只限制本地模型创建", "旧LeafValue个人倍率在所有作用域继续生效", "Streaming加载回收不改变逻辑进度", "预览叶片不可收取且区域完成数量准确"]
     },
     {
       "id": "tools-upgrades",
@@ -210,10 +215,10 @@
       ],
       "persistentFields": ["UnlockedTools", "HandUpgradeLevels", "ToolUpgradeLevels", "PlayerAttributeLevels", "LastEquippedTool"],
       "studioContractSections": ["清洁工具模板", "收割范围与描边", "StarterGui契约", "SoundService契约", "Prompt与代码职责"],
-      "studioPaths": ["game.ReplicatedStorage.tool", "game.Workspace.Function.tool04", "game.StarterGui.GameHUD.HUDRoot"],
-      "keywords": ["Tool01", "Tool02", "Tool03", "Tool04", "Automatic", "upgrade", "工具", "升级", "吸尘器", "Beam"],
+      "studioPaths": ["game.ReplicatedStorage.tool", "game.Workspace.Function.tool04", "game.StarterGui.GameHUD.HUDRoot", "game.StarterGui.GameHUD.UPattribute"],
+      "keywords": ["Tool01", "Tool02", "Tool03", "Tool04", "Automatic", "UpgradePlayerAttribute", "legacy LeafValue", "upgrade", "工具", "升级", "吸尘器", "Beam"],
       "dependencies": ["leaves-cleaning", "economy-commerce", "hud-camera"],
-      "regressionChecks": ["装备、卸下、死亡和切换庭院停止旧输入", "升级只由服务端扣费并应用", "Tool04购买台视觉按玩家所有权隔离"]
+      "regressionChecks": ["装备、卸下、死亡和切换庭院停止旧输入", "工具与普通升级按1.5的重生次数幂且只由服务端扣费", "LeafValue没有购买卡且伪造升级请求不扣费", "Tool04购买台视觉按玩家所有权隔离"]
     },
     {
       "id": "bags-capacity",
@@ -233,7 +238,7 @@
         "src/server/Services/DeveloperProductService.luau",
         "src/server/Services/ProductService.luau"
       ],
-      "remotes": ["BagFullPickupAttempt"],
+      "remotes": ["BagFullPickupAttempt", "RequestBagPurchase"],
       "snapshotFields": [
         "CurrentBagValue", "BagCapacity", "BagCapacityBonus", "BagFull", "BagLevel", "BagExpansionLevel",
         "BagName", "BagImage", "BagPrice", "PermanentBagOwnership", "PermanentBagOwnershipReady",
@@ -246,11 +251,14 @@
       "studioContractSections": ["袋子模板", "StarterGui契约", "Prompt与代码职责"],
       "studioPaths": [
         "game.Workspace.Area_01.BagProduct_01", "game.ReplicatedStorage.bag",
-        "game.StarterGui.GameHUD.HUDRoot.BagFrame"
+        "game.StarterGui.GameHUD.HUDRoot.BagFrame",
+        "game.StarterGui.GameHUD.UPattribute.Player.Pickup0001",
+        "game.StarterGui.GameHUD.UPattribute.Player.Pickup0002",
+        "game.StarterGui.GameHUD.UPattribute.Player.Pickup0003"
       ],
-      "keywords": ["BagProduct_01", "BagExpansionLevel", "BagCapacity", "permanent bag", "背包", "容量", "扩容", "介绍"],
+      "keywords": ["BagProduct_01", "RequestBagPurchase", "BagExpansionLevel", "BagCapacity", "Pickup0001", "permanent bag", "背包", "容量", "扩容", "介绍"],
       "dependencies": ["persistence-reset", "economy-commerce", "hud-camera"],
-      "regressionChecks": ["普通背包与永久背包容量取正确优先级", "扩容增量和价格只读BagConfig", "购买台价格、Prompt、模型和Bag+文字同时刷新"]
+      "regressionChecks": ["普通背包与永久背包容量取正确优先级", "扩容增量和价格只读BagConfig", "购买台与Player页三张背包卡同时刷新且金币购买不能跳级", "Developer Product和Game Pass继续由权威权益流程处理"]
     },
     {
       "id": "economy-commerce",
@@ -326,7 +334,7 @@
       ],
       "keywords": ["LostItem", "Lucky", "codex", "Reveal", "失物", "幸运箱", "图鉴", "NEW"],
       "dependencies": ["leaves-cleaning", "economy-commerce", "hud-camera"],
-      "regressionChecks": ["地面结果和库存授予由服务端裁决", "揭晓时序与服务端授予总时长一致", "NEW提示等待动画结束和成功入库且只显示一次"]
+      "regressionChecks": ["地面结果和库存授予由服务端裁决", "每200片只在当前累计数正好到达倍数时判定且重进不补抽", "揭晓时序与服务端授予总时长一致", "NEW提示等待动画结束和成功入库且只显示一次"]
     },
     {
       "id": "poop-lobby",
@@ -364,6 +372,7 @@
         "src/shared/Config/TutorialConfig.luau"
       ],
       "relatedSources": [
+		"src/client/Controllers/AreaCoinResetController.luau",
         "src/client/Controllers/AreaDoorController.luau",
         "src/client/Controllers/LostItemGuidanceController.luau",
         "src/client/Controllers/HUDController.luau"
@@ -391,6 +400,7 @@
         "src/shared/DurationFormat.luau"
       ],
       "relatedSources": [
+		"src/client/Controllers/AreaCoinResetController.luau",
         "src/client/Controllers/CoinFlipController.luau",
         "src/client/Controllers/ToolController.luau"
       ],
@@ -404,7 +414,7 @@
       ],
       "keywords": ["HUDController", "ModalPanel", "Camera", "CenterFly", "HUD", "界面", "镜头", "提示"],
       "dependencies": ["platform-state"],
-      "regressionChecks": ["主面板互斥且模糊效果正确恢复", "中央飞入效果回收时恢复模板状态", "角色重建和关闭界面后镜头输入恢复"]
+      "regressionChecks": ["主面板互斥且模糊效果正确恢复", "个人历史倍率x1时隐藏且大于x1时显示", "中央飞入效果回收时恢复模板状态", "角色重建和关闭界面后镜头输入恢复"]
     },
     {
       "id": "coin-flip",
@@ -437,12 +447,12 @@
       "document": "docs/features/14_COMMUNITY_FRIENDS.md",
       "primarySources": [
         "src/client/Controllers/CommunityController.luau",
+        "src/client/Controllers/FriendRewardController.luau",
         "src/server/Services/CommunityService.luau",
         "src/shared/Config/CommunityConfig.luau"
       ],
       "relatedSources": [
-        "src/server/Services/PlayerDataService.luau",
-        "src/server/Services/YardInviteService.luau"
+        "src/server/Services/PlayerDataService.luau"
       ],
       "remotes": ["ClaimCommunityReward", "ClaimFriendRewards"],
       "snapshotFields": ["CommunityRewardClaimed", "PendingFriendRewardTotal", "PendingFriendRewardContributors"],
@@ -482,6 +492,54 @@
       "keywords": ["Leaderboard", "PlaytestMetrics", "funnel", "排行榜", "分析", "漏斗", "在线时长"],
       "dependencies": ["persistence-reset", "leaves-cleaning", "poop-lobby"],
       "regressionChecks": ["普通DataStore与OrderedDataStore失败可重试", "同一行为只增加一次统计", "Studio只输出测试日志而不污染正式分析"]
+    },
+    {
+      "id": "coop-matchmaking",
+      "title": "四人合作匹配与副本",
+      "status": "active",
+      "document": "docs/features/16_COOP_MATCHMAKING.md",
+      "primarySources": [
+        "src/client/Controllers/CoopMatchController.luau",
+        "src/client/Controllers/PartyController.luau",
+        "src/server/Services/CoopMatchService.luau",
+        "src/server/Services/PartyMatchmakingService.luau",
+        "src/shared/Config/CoopMatchConfig.luau"
+      ],
+      "relatedSources": [
+        "src/client/Controllers/AreaDoorController.luau",
+        "src/client/Controllers/YardLeafController.luau",
+        "src/client/init.client.luau",
+        "src/server/Services/LeafService.luau",
+        "src/server/Services/LostItemService.luau",
+        "src/server/Services/PlayerDataService.luau",
+        "src/server/Services/PoopService.luau",
+        "src/server/init.server.luau"
+      ],
+      "remotes": ["CoopMatchSnapshot", "PartySnapshot", "RequestCoopReturn", "RequestPartyAction"],
+      "snapshotFields": [],
+      "persistentFields": [],
+      "studioContractSections": ["合作匹配与副本", "StarterGui契约"],
+      "studioPaths": [
+        "game.Workspace.Function.place001.join.BillboardGui.Frame",
+        "game.Workspace.Function.place002.join.BillboardGui.Frame",
+        "game.Workspace.Function.place003.join.BillboardGui.Frame",
+        "game.Workspace.Function.place004.join.BillboardGui.Frame",
+        "game.StarterGui.GameHUD.Team001",
+        "game.StarterGui.GameHUD.Team0EXC",
+        "game.StarterGui.GameHUD.Team"
+      ],
+      "keywords": ["CoopMatch", "party", "matchmaking", "Team001", "组队", "匹配", "合作副本"],
+      "dependencies": [
+        "platform-state", "persistence-reset", "leaves-cleaning", "tools-upgrades", "bags-capacity",
+        "economy-commerce", "lost-items", "poop-lobby", "leaderboards-analytics"
+      ],
+      "regressionChecks": [
+        "四个本服组队台互不影响且只有房主可配置",
+        "发布副本只接受大厅保留服务器名单成员",
+        "Coop临时成长和共享区域进度不覆盖主存档",
+        "Coop保留老档LeafValue个人倍率但不开放购买",
+        "Yard、Lobby与Coop叶子作用域不串包"
+      ]
     }
   ],
   "archivedSystems": [

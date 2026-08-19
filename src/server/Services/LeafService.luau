@@ -4,6 +4,7 @@ local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
 local HarvestGeometry = require(ReplicatedStorage.Shared.HarvestGeometry)
+local CoopMatchConfig = require(ReplicatedStorage.Shared.Config.CoopMatchConfig)
 local LeafConfig = require(ReplicatedStorage.Shared.Config.LeafConfig)
 local RebirthConfig = require(ReplicatedStorage.Shared.Config.RebirthConfig)
 local RegionConfig = require(ReplicatedStorage.Shared.Config.RegionConfig)
@@ -51,12 +52,12 @@ local DUST_COLLECTOR_TOOL_ID = "Tool04"
 local RANDOM_SEED_MODULUS = 2_147_483_647
 local MAXIMUM_ACTIVE_LEAVES = math.max(
 	1,
-	math.floor(tonumber(leafPopulationConfig.MaximumActiveLeaves) or 2000)
+	math.floor(tonumber(leafPopulationConfig.MaximumActiveLeaves) or 20000)
 )
 local REFILL_WORK_BATCH_SIZE = math.clamp(
-	math.floor(tonumber(leafPopulationConfig.RefillWorkBatchSize) or 20),
+	math.floor(tonumber(leafPopulationConfig.RefillWorkBatchSize) or 100),
 	1,
-	20
+	100
 )
 local REFILL_BATCH_INTERVAL = math.max(
 	0.1,
@@ -65,13 +66,17 @@ local REFILL_BATCH_INTERVAL = math.max(
 local REFILL_RETRY_INTERVAL = math.max(0.05, tonumber(leafPopulationConfig.RefillRetryInterval) or 0.05)
 local REFILL_PREPARED_POSITION_TARGET = math.max(
 	1,
-	math.floor(tonumber(leafPopulationConfig.RefillPreparedPositionTarget) or 200)
+	math.floor(tonumber(leafPopulationConfig.RefillPreparedPositionTarget) or 600)
 )
 local REFILL_PREPARATION_ATTEMPTS_PER_HEARTBEAT = math.max(
 	1,
-	math.floor(tonumber(leafPopulationConfig.RefillPreparationAttemptsPerHeartbeat) or 4)
+	math.floor(tonumber(leafPopulationConfig.RefillPreparationAttemptsPerHeartbeat) or 12)
 )
-local REFILL_ANCHOR_POSITION_ATTEMPTS = 4
+local REFILL_DISTRIBUTION_CANDIDATE_COUNT = math.clamp(
+	math.floor(tonumber(leafPopulationConfig.RefillDistributionCandidateCount) or 4),
+	1,
+	16
+)
 
 local activePickupPlayers = {}
 local activeMovingLeaves = {}
@@ -230,6 +235,19 @@ function LeafService:Init(playerDataService, bagService, toolActionService, metr
 	self.RefillPreparationAreaStates = {}
 	self.RefillPreparationCursor = 1
 	self.LobbyYard = nil
+	self.CoopYard = nil
+	self.CoopPersonalLeafCounts = {}
+	self.IsCoop = CoopMatchConfig.IsCoop()
+	self.CoopDifficulty = "EASY"
+	self.CoopGameplayEnabled = not self.IsCoop
+	if self.IsCoop then
+		local firstPlayer = Players:GetPlayers()[1]
+		local joinData = firstPlayer and firstPlayer:GetJoinData() or nil
+		local teleportData = joinData and joinData.TeleportData or nil
+		self.CoopDifficulty = CoopMatchConfig.NormalizeDifficulty(
+			type(teleportData) == "table" and teleportData.Difficulty or "EASY"
+		)
+	end
 
 	local orderedLeafTypes = {}
 	for _, leafType in LeafConfig.ActiveOrder do
@@ -446,14 +464,12 @@ function LeafService:Init(playerDataService, bagService, toolActionService, metr
 
 	playerDataService:AddPlayerStateReadyHandler(function(player)
 		task.spawn(function()
-			self:_prepareOwnerYard(player)
+			if self.IsCoop then
+				self:_prepareCoopYard(player)
+			else
+				self:_prepareOwnerYard(player)
+			end
 		end)
-	end)
-	yardService:AddYardChangedHandler(function(player)
-		self:SetPickupActive(player, false)
-		self:ClearHarvestAim(player)
-		self:SendSnapshot(player)
-		self:_notifyLeafStateChanged(player)
 	end)
 	remotes.YardLeafSnapshot.OnServerEvent:Connect(function(player)
 		local now = os.clock()
@@ -472,6 +488,7 @@ function LeafService:Init(playerDataService, bagService, toolActionService, metr
 		self.SnapshotSerials[player] = nil
 		self.SnapshotCompletedSerials[player] = nil
 		self.PendingLobbyDeltasByPlayer[player] = nil
+		self.CoopPersonalLeafCounts[player] = nil
 		self.LastSnapshotRequestTimes[player] = nil
 		for leaf in activeMovingLeaves do
 			if leaf.LastInfluencedPlayer == player then
@@ -479,7 +496,7 @@ function LeafService:Init(playerDataService, bagService, toolActionService, metr
 				leaf.LastInfluencedToolId = nil
 			end
 		end
-		local leavingYard = self.Yards[player]
+		local leavingYard = if self.IsCoop then nil else self.Yards[player]
 		if leavingYard then
 			for _, areaState in leavingYard.Areas do
 				self:_invalidateRefillPreparation(areaState)
@@ -489,6 +506,9 @@ function LeafService:Init(playerDataService, bagService, toolActionService, metr
 			end
 		end
 		task.delay(3, function()
+			if self.IsCoop then
+				return
+			end
 			local yard = self.Yards[player]
 			if yard then
 				for leaf in yard.LeavesById do
@@ -542,7 +562,9 @@ function LeafService:Init(playerDataService, bagService, toolActionService, metr
 			self:_updateMovingLeaves(LEAF_MOTION_STEP)
 		end
 	end)
-	self:_initializeLobby()
+	if not self.IsCoop then
+		self:_initializeLobby()
+	end
 end
 
 function LeafService:_chooseLeafType(random, areaId)
@@ -596,6 +618,62 @@ function LeafService:_makeYard(owner)
 	}
 	self.Yards[owner] = yard
 	return yard
+end
+
+function LeafService:_isYardCurrent(yard)
+	if not yard then
+		return false
+	end
+	if yard.IsCoop == true then
+		return self.CoopYard == yard
+	end
+	return yard.Owner ~= nil and self.Yards[yard.Owner] == yard
+end
+
+function LeafService:_getYardMembers(yard)
+	if yard and yard.IsCoop == true then
+		local members = {}
+		for _, player in Players:GetPlayers() do
+			if self.PlayerDataService:GetState(player) then
+				members[#members + 1] = player
+			end
+		end
+		return members
+	end
+	return if yard and yard.Owner then self.YardService:GetMembers(yard.Owner) else {}
+end
+
+function LeafService:_prepareCoopYard(player)
+	if not self.IsCoop or player.Parent ~= Players or not self.PlayerDataService:GetState(player) then
+		return
+	end
+	local yard = self.CoopYard
+	if not yard then
+		yard = self:_makeYard(player)
+		yard.IsCoop = true
+		yard.OwnerUserId = 0
+		yard.HighestUnlockedAreaNumber = 1
+		self.CoopYard = yard
+		self:_reconcileAreaGeneration(yard)
+		yard.Preparing = false
+		yard.Ready = true
+	else
+		while yard.Preparing do
+			task.wait()
+		end
+	end
+	if self.CoopYard == yard and yard.Ready then
+		local state = self.PlayerDataService:GetState(player)
+		if state then
+			for areaNumber = 1, math.clamp(yard.HighestUnlockedAreaNumber or 1, 1, 8) do
+				local areaId = string.format("Area_%02d", areaNumber)
+				state.UnlockedAreas[areaId] = true
+				state.YardProgress.UnlockedAreas[areaId] = true
+			end
+		end
+		self:SendSnapshot(player)
+		self:_queueProgressSnapshot(yard, true)
+	end
 end
 
 function LeafService:_getLobbyLeafId(slotIndex)
@@ -800,32 +878,50 @@ function LeafService:_discardAreaState(yard, areaId)
 end
 
 function LeafService:_reconcileAreaGeneration(yard)
-	if self.Yards[yard.Owner] ~= yard then
+	if not self:_isYardCurrent(yard) then
 		return false
+	end
+	if yard.IsCoop == true then
+		local highestUnlockedAreaNumber = math.clamp(
+			math.floor(tonumber(yard.HighestUnlockedAreaNumber) or 1),
+			1,
+			8
+		)
+		local desiredModes = {}
+		for areaNumber = 1, highestUnlockedAreaNumber do
+			desiredModes[string.format("Area_%02d", areaNumber)] = true
+		end
+		if highestUnlockedAreaNumber < 8 then
+			desiredModes[string.format("Area_%02d", highestUnlockedAreaNumber + 1)] = false
+		end
+		for _, areaId in RegionConfig.Order do
+			if yard.Areas[areaId] and desiredModes[areaId] == nil then
+				self:_discardAreaState(yard, areaId)
+			end
+		end
+		for _, areaId in RegionConfig.Order do
+			local gameplayReady = desiredModes[areaId]
+			if gameplayReady ~= nil then
+				self:_generateArea(yard, areaId, gameplayReady)
+				if not self:_isYardCurrent(yard) then
+					return false
+				end
+			end
+		end
+		return true
 	end
 	local state = self.PlayerDataService:GetState(yard.Owner)
 	if not state then
 		return false
 	end
-	local savedAreas = state.YardProgress and state.YardProgress.Areas or {}
 	local highestUnlockedAreaNumber = 0
-	local currentAreaNumber = nil
 	for areaNumber, areaId in RegionConfig.Order do
 		if state.UnlockedAreas[areaId] == true then
 			highestUnlockedAreaNumber = math.max(highestUnlockedAreaNumber, areaNumber)
-			local savedArea = savedAreas[areaId]
-			local clearedRatio = math.clamp(
-				tonumber(type(savedArea) == "table" and savedArea.ClearedRatio) or 0,
-				0,
-				1
-			)
-			if currentAreaNumber == nil and clearedRatio < 1 then
-				currentAreaNumber = areaNumber
-			end
 		end
 	end
 
-	local formalThroughAreaNumber = currentAreaNumber or highestUnlockedAreaNumber
+	local formalThroughAreaNumber = highestUnlockedAreaNumber
 	local previewAreaNumber = formalThroughAreaNumber > 0
 		and formalThroughAreaNumber < RegionConfig.AreaCount
 		and formalThroughAreaNumber + 1
@@ -859,7 +955,7 @@ function LeafService:_reconcileAreaGeneration(yard)
 end
 
 function LeafService:_queueProgressionReconcile(yard)
-	if self.Yards[yard.Owner] ~= yard then
+	if not self:_isYardCurrent(yard) then
 		return false
 	end
 	if yard.ProgressionReconcileRunning then
@@ -871,9 +967,9 @@ function LeafService:_queueProgressionReconcile(yard)
 		repeat
 			yard.ProgressionReconcilePending = false
 			self:_reconcileAreaGeneration(yard)
-		until self.Yards[yard.Owner] ~= yard or yard.ProgressionReconcilePending ~= true
+		until not self:_isYardCurrent(yard) or yard.ProgressionReconcilePending ~= true
 		yard.ProgressionReconcileRunning = false
-		if self.Yards[yard.Owner] == yard then
+		if self:_isYardCurrent(yard) then
 			self:SendSnapshotToMembers(yard)
 			self:_queueProgressSnapshot(yard, true)
 		end
@@ -1165,74 +1261,51 @@ function LeafService:_makeLeafPlacementCandidate(random, definition, region, bou
 	return self:_makeLeafBoundingCFrameOnSurface(random, surface, region, boundingSize, surfacePosition), surface
 end
 
-function LeafService:_getSurfacePositionAtWorldXZ(surface, region, worldX, worldZ)
-	if not surface or not surface:IsA("BasePart") then
-		return nil
-	end
-	local surfaceNormal = surface.CFrame.UpVector
-	if math.abs(surfaceNormal.Y) < 0.001 then
-		return nil
-	end
-	local surfaceOrigin = surface.CFrame:PointToWorldSpace(Vector3.new(0, surface.Size.Y / 2, 0))
-	local worldY = surfaceOrigin.Y
-		- (
-			surfaceNormal.X * (worldX - surfaceOrigin.X)
-				+ surfaceNormal.Z * (worldZ - surfaceOrigin.Z)
-		) / surfaceNormal.Y
-	local projectedPosition = Vector3.new(worldX, worldY, worldZ)
-	local localPosition = surface.CFrame:PointToObjectSpace(projectedPosition)
-	local paddingX = math.min(region.EdgePadding, surface.Size.X * 0.2)
-	local paddingZ = math.min(region.EdgePadding, surface.Size.Z * 0.2)
-	if
-		localPosition.X < -surface.Size.X / 2 + paddingX
-		or localPosition.X > surface.Size.X / 2 - paddingX
-		or localPosition.Z < -surface.Size.Z / 2 + paddingZ
-		or localPosition.Z > surface.Size.Z / 2 - paddingZ
-	then
-		return nil
-	end
-	return surface.CFrame:PointToWorldSpace(
-		Vector3.new(localPosition.X, surface.Size.Y / 2, localPosition.Z)
-	)
-end
-
-function LeafService:_makeAnchoredRefillPlacement(random, areaState, boundingSize)
-	local areaLeaves = areaState.Leaves
-	if #areaLeaves <= 0 then
-		return self:_makeLeafPlacementCandidate(random, areaState.Definition, areaState.Region, boundingSize)
-	end
-
-	local anchor = areaLeaves[random:NextInteger(1, #areaLeaves)]
-	local surface = anchor and anchor.PlacementSurface
-	if not surface or not surface:IsA("BasePart") then
-		return nil, nil
-	end
-	local cellX, cellZ = leafGridCoordinates(anchor.BoundingCFrame.Position)
-	local cellInset = 0.001
-	local minimumX = cellX * SERVER_LEAF_GRID_CELL_SIZE + cellInset
-	local maximumX = (cellX + 1) * SERVER_LEAF_GRID_CELL_SIZE - cellInset
-	local minimumZ = cellZ * SERVER_LEAF_GRID_CELL_SIZE + cellInset
-	local maximumZ = (cellZ + 1) * SERVER_LEAF_GRID_CELL_SIZE - cellInset
-	for _ = 1, REFILL_ANCHOR_POSITION_ATTEMPTS do
-		local worldX = random:NextNumber(minimumX, maximumX)
-		local worldZ = random:NextNumber(minimumZ, maximumZ)
-		local surfacePosition = self:_getSurfacePositionAtWorldXZ(
-			surface,
-			areaState.Region,
-			worldX,
-			worldZ
-		)
-		if surfacePosition then
-			return self:_makeLeafBoundingCFrameOnSurface(
-				random,
-				surface,
-				areaState.Region,
-				boundingSize,
-				surfacePosition
-			), surface
+function LeafService:_getRefillGridOccupancy(areaState, gridKey)
+	local occupancy = tonumber(areaState.RefillPreparedGridCounts[gridKey]) or 0
+	local cell = areaState.LeafGrid[gridKey]
+	if cell then
+		for _ in cell do
+			occupancy += 1
 		end
 	end
-	return nil, nil
+	return occupancy
+end
+
+function LeafService:_makeBalancedRefillPlacement(random, areaState, boundingSize)
+	local candidates = table.create(REFILL_DISTRIBUTION_CANDIDATE_COUNT)
+	for order = 1, REFILL_DISTRIBUTION_CANDIDATE_COUNT do
+		local boundingCFrame, placementSurface = self:_makeLeafPlacementCandidate(
+			random,
+			areaState.Definition,
+			areaState.Region,
+			boundingSize
+		)
+		if boundingCFrame and placementSurface then
+			local cellX, cellZ = leafGridCoordinates(boundingCFrame.Position)
+			local gridKey = leafGridKey(cellX, cellZ)
+			candidates[#candidates + 1] = {
+				BoundingCFrame = boundingCFrame,
+				PlacementSurface = placementSurface,
+				GridKey = gridKey,
+				Occupancy = self:_getRefillGridOccupancy(areaState, gridKey),
+				Order = order,
+			}
+		end
+	end
+
+	table.sort(candidates, function(left, right)
+		if left.Occupancy == right.Occupancy then
+			return left.Order < right.Order
+		end
+		return left.Occupancy < right.Occupancy
+	end)
+	for _, candidate in candidates do
+		if not self:_isLeafPlacementBlocked(candidate.BoundingCFrame, boundingSize) then
+			return candidate.BoundingCFrame, candidate.PlacementSurface, candidate.GridKey
+		end
+	end
+	return nil, nil, nil
 end
 
 function LeafService:_chooseLeafPlacement(random, definition, region, boundingSize)
@@ -1289,6 +1362,8 @@ function LeafService:_invalidateRefillPreparation(areaState)
 	areaState.RefillPreparationToken = (areaState.RefillPreparationToken or 0) + 1
 	areaState.RefillPreparationRegistered = false
 	areaState.RefillPreparedPositionCount = 0
+	areaState.RefillPreparedGridCounts = areaState.RefillPreparedGridCounts or {}
+	table.clear(areaState.RefillPreparedGridCounts)
 	local positionsByLeafType = areaState.RefillPreparedPositionsByLeafType or {}
 	for _, queue in positionsByLeafType do
 		table.clear(queue)
@@ -1358,20 +1433,12 @@ function LeafService:_prepareRefillPositionForArea(areaState)
 		areaState.RefillPreparationSerial
 	)
 	local boundingSize = self.TemplateBounds[leafType].Size
-	local boundingCFrame, placementSurface = self:_makeAnchoredRefillPlacement(random, areaState, boundingSize)
+	local boundingCFrame, placementSurface, gridKey = self:_makeBalancedRefillPlacement(
+		random,
+		areaState,
+		boundingSize
+	)
 	if not boundingCFrame then
-		return true
-	end
-	local cellX, cellZ = leafGridCoordinates(boundingCFrame.Position)
-	local gridKey = leafGridKey(cellX, cellZ)
-	local allowEmptyArea = #areaState.Leaves == 0
-	if not allowEmptyArea then
-		local cell = areaState.LeafGrid[gridKey]
-		if not cell or next(cell) == nil then
-			return true
-		end
-	end
-	if self:_isLeafPlacementBlocked(boundingCFrame, boundingSize) then
 		return true
 	end
 	if not self:_canPrepareRefillPositions(areaState)
@@ -1387,9 +1454,10 @@ function LeafService:_prepareRefillPositionForArea(areaState)
 		PlacementSurface = placementSurface,
 		GridKey = gridKey,
 		PreparationToken = preparationToken,
-		AllowEmptyArea = allowEmptyArea,
 	}
 	areaState.RefillPreparedPositionCount += 1
+	areaState.RefillPreparedGridCounts[gridKey] =
+		(tonumber(areaState.RefillPreparedGridCounts[gridKey]) or 0) + 1
 	return true
 end
 
@@ -1424,19 +1492,19 @@ function LeafService:_takePreparedRefillPlacement(areaState, leafType)
 		return nil, nil
 	end
 	areaState.RefillPreparedPositionCount = math.max(0, areaState.RefillPreparedPositionCount - 1)
+	local preparedInGrid = tonumber(areaState.RefillPreparedGridCounts[candidate.GridKey]) or 0
+	if preparedInGrid <= 1 then
+		areaState.RefillPreparedGridCounts[candidate.GridKey] = nil
+	else
+		areaState.RefillPreparedGridCounts[candidate.GridKey] = preparedInGrid - 1
+	end
 	if not self:_isCurrentAreaState(areaState)
 		or candidate.LeafType ~= leafType
 		or candidate.PreparationToken ~= areaState.RefillPreparationToken
+		or not candidate.PlacementSurface
+		or not candidate.PlacementSurface:IsA("BasePart")
+		or not candidate.PlacementSurface:IsDescendantOf(areaState.Definition.Ground)
 	then
-		return nil, nil
-	end
-
-	if #areaState.Leaves > 0 then
-		local cell = areaState.LeafGrid[candidate.GridKey]
-		if not cell or next(cell) == nil then
-			return nil, nil
-		end
-	elseif not candidate.AllowEmptyArea then
 		return nil, nil
 	end
 	return candidate.BoundingCFrame, candidate.PlacementSurface
@@ -1514,6 +1582,9 @@ function LeafService:_isCurrentAreaState(areaState)
 	if not yard or areaState.Cancelled == true then
 		return false
 	end
+	if yard.IsCoop == true then
+		return self.CoopYard == yard and yard.Areas[areaState.AreaId] == areaState
+	end
 	if yard.IsLobby == true then
 		return self.LobbyYard == yard and yard.Areas[areaState.AreaId] == areaState
 	end
@@ -1561,6 +1632,33 @@ function LeafService:_queueAreaRefill(areaState)
 		or self:_getAreaRefillDeficit(areaState) <= 0
 		or areaState.RefillQueued
 	then
+		return
+	end
+	if areaState.Yard.IsCoop == true then
+		areaState.CollectedValue = math.min(areaState.TotalValue, areaState.CollectedValue + leaf.BagValue)
+		areaState.CollectedLeafCount = math.min(areaState.TotalLeafCount, areaState.CollectedLeafCount + 1)
+		local playerCounts = self.CoopPersonalLeafCounts[influencingPlayer]
+		if not playerCounts then
+			playerCounts = {}
+			self.CoopPersonalLeafCounts[influencingPlayer] = playerCounts
+		end
+		local personalCount = (tonumber(playerCounts[leaf.AreaId]) or 0) + 1
+		playerCounts[leaf.AreaId] = personalCount
+		self:_notifyLeafCollectedHandlers(
+			influencingPlayer,
+			leaf.AreaId,
+			leaf.BoundingCFrame.Position,
+			personalCount,
+			collectionMode,
+			influencingPlayer.UserId,
+			{ Kind = "Coop", SharedCollectedLeafCount = areaState.CollectedLeafCount }
+		)
+		if areaState.TotalValue > 0 and areaState.CollectedValue >= areaState.TotalValue then
+			self:_completeArea(leaf.Yard, areaState)
+		else
+			self:_queueProgressSnapshot(leaf.Yard, false)
+			self:_queueAreaRefill(areaState)
+		end
 		return
 	end
 
@@ -1625,8 +1723,10 @@ function LeafService:_generateArea(yard, areaId, gameplayReady)
 	local region = RegionConfig[areaId]
 	local targetCount
 	if gameplayReady then
-		local ownerState = self.PlayerDataService:GetState(yard.Owner)
-		local multiplier = RebirthConfig.GetLeafCountMultiplier(ownerState and ownerState.RebirthCount)
+		local ownerState = yard.Owner and self.PlayerDataService:GetState(yard.Owner) or nil
+		local multiplier = if yard.IsCoop == true
+			then CoopMatchConfig.GetDifficultyMultiplier(self.CoopDifficulty)
+			else RebirthConfig.GetLeafCountMultiplier(ownerState and ownerState.RebirthCount)
 		targetCount = math.max(1, math.floor(definition.FullTargetLeafCount * multiplier + 0.5))
 	else
 		targetCount = math.min(RegionConfig.LockedPreviewLeafCount, definition.FullTargetLeafCount)
@@ -1667,13 +1767,18 @@ function LeafService:_generateArea(yard, areaId, gameplayReady)
 		Leaves = {},
 		LeafGrid = {},
 		HandPickupGrid = {},
-		SequenceSeed = normalizeRandomSeed(region.Seed + (yard.OwnerUserId % 100_000) * 7_919),
+		SequenceSeed = normalizeRandomSeed(
+			region.Seed
+				+ (yard.OwnerUserId % 100_000) * 7_919
+				+ (if yard.IsCoop == true then CoopMatchConfig.GetDifficultyMultiplier(self.CoopDifficulty) * 104_729 else 0)
+		),
 		NextLeafIndex = 1,
 		PendingLeafCount = targetCount,
 		RefillQueued = false,
 		RefillToken = 0,
 		RefillPreparedPositionsByLeafType = refillPreparedPositionsByLeafType,
 		RefillPreparedPositionCount = 0,
+		RefillPreparedGridCounts = {},
 		RefillPreparedTargetsByLeafType = refillPreparedTargetsByLeafType,
 		RefillPreparationSerial = 0,
 		RefillPreparationToken = 1,
@@ -1691,7 +1796,7 @@ function LeafService:_generateArea(yard, areaId, gameplayReady)
 	end
 
 	local restoredRatio = 0
-	if gameplayReady then
+	if gameplayReady and yard.IsCoop ~= true then
 		local ownerState = self.PlayerDataService:GetState(yard.Owner)
 		local savedArea = ownerState
 			and ownerState.YardProgress
@@ -1857,6 +1962,7 @@ function LeafService:_createResetAreaState(yard, areaId, resetRunSerial)
 		RefillToken = 0,
 		RefillPreparedPositionsByLeafType = refillPreparedPositionsByLeafType,
 		RefillPreparedPositionCount = 0,
+		RefillPreparedGridCounts = {},
 		RefillPreparedTargetsByLeafType = refillPreparedTargetsByLeafType,
 		RefillPreparationSerial = 0,
 		RefillPreparationToken = 1,
@@ -1900,41 +2006,113 @@ function LeafService:HasActiveResetCoins(player)
 	return false
 end
 
-function LeafService:ResetCompletedAreaCoins(player)
-	local state = self.PlayerDataService:GetState(player)
-	local yard = self.Yards[player]
-	if not state or not yard or not yard.Ready then
-		return false, "Your yard is not ready."
-	end
-	if self.YardService:GetActiveOwner(player) ~= player then
-		return false, "Return to your yard before resetting coins."
-	end
-	if self:HasActiveResetCoins(player) then
-		return false, "Collect all reset coins before resetting again."
-	end
-
+local function getUnlockedAreaResetTargets(state)
 	local targetAreaIds = {}
-	local savedAreas = state.YardProgress and state.YardProgress.Areas or {}
+	local firstIncompleteAreaNumber = nil
+	local highestUnlockedAreaNumber = 0
+	local savedAreas = state and state.YardProgress and state.YardProgress.Areas or {}
+	local unlockedAreas = state and state.UnlockedAreas or {}
 	for areaNumber, areaId in RegionConfig.Order do
-		if state.UnlockedAreas[areaId] == true then
+		if unlockedAreas[areaId] == true then
+			targetAreaIds[#targetAreaIds + 1] = areaId
+			highestUnlockedAreaNumber = areaNumber
 			local savedArea = savedAreas[areaId]
 			local clearedRatio = math.clamp(
 				tonumber(type(savedArea) == "table" and savedArea.ClearedRatio) or 0,
 				0,
 				1
 			)
-			if clearedRatio < 1 then
-				return false, string.format(
-					"Area %d is not fully cleared. Reset unavailable.",
-					areaNumber
-				)
+			if clearedRatio < 1 and firstIncompleteAreaNumber == nil then
+				firstIncompleteAreaNumber = areaNumber
 			end
-			targetAreaIds[#targetAreaIds + 1] = areaId
 		end
 	end
-	if #targetAreaIds == 0 then
-		return false, "No cleared areas are ready to reset."
+	return targetAreaIds, highestUnlockedAreaNumber, firstIncompleteAreaNumber
+end
+
+local function getAreaCoinResetRequirementText(highestUnlockedAreaNumber)
+	local lastAreaNumber = math.max(1, math.floor(tonumber(highestUnlockedAreaNumber) or 1))
+	if lastAreaNumber == 1 then
+		return "Clear Areas 1 to reset Coins."
 	end
+	return string.format("Clear Areas 1-%d to reset Coins.", lastAreaNumber)
+end
+
+function LeafService:AreAllUnlockedAreasCleared(player)
+	local state = self.PlayerDataService:GetState(player)
+	if not state then
+		return false
+	end
+	local targetAreaIds, _, firstIncompleteAreaNumber = getUnlockedAreaResetTargets(state)
+	return #targetAreaIds > 0 and firstIncompleteAreaNumber == nil
+end
+
+function LeafService:GetAreaCoinResetStatus(player)
+	local state = self.PlayerDataService:GetState(player)
+	if not state then
+		return {
+			Status = "DataNotReady",
+			Eligible = false,
+			RequirementText = "Player data is not ready.",
+			TargetAreaIds = {},
+		}
+	end
+
+	local yard = self.Yards[player]
+	if not yard or not yard.Ready then
+		return {
+			Status = "YardNotReady",
+			Eligible = false,
+			RequirementText = "Your yard is not ready.",
+			TargetAreaIds = {},
+		}
+	end
+	local targetAreaIds, highestUnlockedAreaNumber, firstIncompleteAreaNumber = getUnlockedAreaResetTargets(state)
+	if self:HasActiveResetCoins(player) then
+		return {
+			Status = "ActiveResetCoins",
+			Eligible = false,
+			RequirementText = "Collect all reset coins before resetting again.",
+			TargetAreaIds = targetAreaIds,
+			RequiredAreaCount = highestUnlockedAreaNumber,
+		}
+	end
+	if #targetAreaIds == 0 then
+		return {
+			Status = "NoAreas",
+			Eligible = false,
+			RequirementText = "No cleared areas are ready to reset.",
+			TargetAreaIds = {},
+			RequiredAreaCount = 0,
+		}
+	end
+
+	local requirementText = getAreaCoinResetRequirementText(highestUnlockedAreaNumber)
+	if firstIncompleteAreaNumber ~= nil then
+		return {
+			Status = "AreasIncomplete",
+			Eligible = false,
+			RequirementText = requirementText,
+			TargetAreaIds = targetAreaIds,
+			RequiredAreaCount = highestUnlockedAreaNumber,
+		}
+	end
+	return {
+		Status = "Eligible",
+		Eligible = true,
+		RequirementText = requirementText,
+		TargetAreaIds = targetAreaIds,
+		RequiredAreaCount = highestUnlockedAreaNumber,
+	}
+end
+
+function LeafService:ResetCompletedAreaCoins(player)
+	local resetStatus = self:GetAreaCoinResetStatus(player)
+	if resetStatus.Eligible ~= true then
+		return false, resetStatus.RequirementText
+	end
+	local yard = self.Yards[player]
+	local targetAreaIds = resetStatus.TargetAreaIds
 
 	yard.ResetRunSerial += 1
 	local resetRunSerial = yard.ResetRunSerial
@@ -1987,6 +2165,9 @@ function LeafService:ResetOwnerYard(owner)
 end
 
 function LeafService:_getYardForPlayer(player)
+	if self.IsCoop then
+		return self.CoopYard
+	end
 	local owner = self.YardService:GetActiveOwner(player)
 	return owner and self.Yards[owner] or nil
 end
@@ -2057,6 +2238,8 @@ function LeafService:SendSnapshot(player)
 		Packets = {},
 	}
 	local ownerUserId = yard.OwnerUserId
+	local scopeKind = if yard.IsCoop == true then "Coop" else "Yard"
+	local scopeId = if yard.IsCoop == true then tostring(game.JobId) else tostring(ownerUserId)
 	local areas = {}
 	local leaves = {}
 	local snapshotMotionSampleTime = Workspace:GetServerTimeNow()
@@ -2082,7 +2265,7 @@ function LeafService:SendSnapshot(player)
 			end
 		end
 	end
-	local lobbyYard = self.LobbyYard
+	local lobbyYard = if yard.IsCoop == true then nil else self.LobbyYard
 	local lobbyAreaState = lobbyYard and lobbyYard.Areas[LeafConfig.Lobby.AreaId] or nil
 	if lobbyAreaState then
 		table.insert(areas, {
@@ -2103,6 +2286,8 @@ function LeafService:SendSnapshot(player)
 		self.Remotes.YardLeafSnapshot:FireClient(player, {
 			Kind = "Begin",
 			YardOwnerUserId = ownerUserId,
+			ScopeKind = scopeKind,
+			ScopeId = scopeId,
 			Serial = serial,
 			Areas = areas,
 			LeafCount = #leaves,
@@ -2118,6 +2303,8 @@ function LeafService:SendSnapshot(player)
 			self.Remotes.YardLeafSnapshot:FireClient(player, {
 				Kind = "Chunk",
 				YardOwnerUserId = ownerUserId,
+				ScopeKind = scopeKind,
+				ScopeId = scopeId,
 				Serial = serial,
 				Leaves = chunk,
 			})
@@ -2127,6 +2314,8 @@ function LeafService:SendSnapshot(player)
 			self.Remotes.YardLeafSnapshot:FireClient(player, {
 				Kind = "End",
 				YardOwnerUserId = ownerUserId,
+				ScopeKind = scopeKind,
+				ScopeId = scopeId,
 				Serial = serial,
 			})
 			self.SnapshotCompletedSerials[player] = serial
@@ -2143,7 +2332,7 @@ function LeafService:SendSnapshot(player)
 end
 
 function LeafService:SendSnapshotToMembers(yard)
-	for _, member in self.YardService:GetMembers(yard.Owner) do
+	for _, member in self:_getYardMembers(yard) do
 		self:SendSnapshot(member)
 	end
 end
@@ -2155,8 +2344,10 @@ function LeafService:_sendDelta(yard, packet)
 	end
 	yard.Revision += 1
 	packet.YardOwnerUserId = yard.OwnerUserId
+	packet.ScopeKind = if yard.IsCoop == true then "Coop" else "Yard"
+	packet.ScopeId = if yard.IsCoop == true then tostring(game.JobId) else tostring(yard.OwnerUserId)
 	packet.Revision = yard.Revision
-	for _, member in self.YardService:GetMembers(yard.Owner) do
+	for _, member in self:_getYardMembers(yard) do
 		if member.Parent == Players then
 			self.Remotes.YardLeafDelta:FireClient(member, packet)
 		end
@@ -2176,6 +2367,8 @@ function LeafService:_sendLobbyDelta(packet)
 		if activeYard and activeYard.Ready and serial then
 			local playerPacket = table.clone(packet)
 			playerPacket.YardOwnerUserId = activeYard.OwnerUserId
+			playerPacket.ScopeKind = "Yard"
+			playerPacket.ScopeId = tostring(activeYard.OwnerUserId)
 			local pendingEntry = self.PendingLobbyDeltasByPlayer[player]
 			if pendingEntry and pendingEntry.Serial == serial then
 				pendingEntry.Packets[#pendingEntry.Packets + 1] = playerPacket
@@ -2265,7 +2458,7 @@ end
 
 function LeafService:_queueProgressSnapshot(yard, immediate)
 	if immediate then
-		for _, member in self.YardService:GetMembers(yard.Owner) do
+		for _, member in self:_getYardMembers(yard) do
 			self.PlayerDataService:PushSnapshot(member)
 		end
 		return
@@ -2276,10 +2469,10 @@ function LeafService:_queueProgressSnapshot(yard, immediate)
 	yard.ProgressSnapshotQueued = true
 	task.delay(PROGRESS_SNAPSHOT_INTERVAL, function()
 		yard.ProgressSnapshotQueued = false
-		if self.Yards[yard.Owner] ~= yard then
+		if not self:_isYardCurrent(yard) then
 			return
 		end
-		for _, member in self.YardService:GetMembers(yard.Owner) do
+		for _, member in self:_getYardMembers(yard) do
 			self.PlayerDataService:PushSnapshot(member)
 		end
 	end)
@@ -2440,7 +2633,11 @@ function LeafService:_tryAutoCollectBroomLeaf(leaf, deferSnapshot)
 		or not player:IsA("Player")
 		or player.Parent ~= Players
 		or not self.PlayerDataService:GetState(player)
-		or (leaf.Yard ~= self.LobbyYard and self:_getYardForPlayer(player) ~= leaf.Yard)
+		or (
+			leaf.Yard ~= self.LobbyYard
+			and leaf.Yard ~= self.CoopYard
+			and self:_getYardForPlayer(player) ~= leaf.Yard
+		)
 	then
 		return "None", nil
 	end
@@ -2828,6 +3025,10 @@ function LeafService:_getPlayerAttemptTimes(player)
 end
 
 function LeafService:_pickupForPlayer(player, character)
+	if self.IsCoop and not self.CoopGameplayEnabled then
+		activePickupPlayers[player] = nil
+		return
+	end
 	local humanoid = character:FindFirstChildOfClass("Humanoid")
 	local rootPart = character:FindFirstChild("HumanoidRootPart")
 	if not humanoid or humanoid.Health <= 0 or not rootPart or not rootPart:IsA("BasePart") then
@@ -2972,6 +3173,9 @@ function LeafService:SetPickupActive(player, active)
 	if active ~= true then
 		activePickupPlayers[player] = nil
 		if self.ToolActionService then self.ToolActionService:SetContinuousActive(player, nil, false) end
+		return
+	end
+	if self.IsCoop and not self.CoopGameplayEnabled then
 		return
 	end
 	if player.Parent ~= Players then return end
@@ -3160,7 +3364,9 @@ end
 
 function LeafService:_collectLeaf(player, leaf, deferSnapshot, collectionBatch)
 	if leaf.Yard.LeavesById[leaf.Id] ~= leaf then return false end
-	local sourceOwnerUserId = if leaf.IsLobby == true then player.UserId else leaf.Yard.OwnerUserId
+	local sourceOwnerUserId = if leaf.IsLobby == true or leaf.Yard.IsCoop == true
+		then player.UserId
+		else leaf.Yard.OwnerUserId
 	local addedSuccessfully, addedAmount, storageMode, awardedCoins, targetCoins = self.BagService:TryAdd(
 		player,
 		leaf.BagValue,
@@ -3181,6 +3387,7 @@ function LeafService:_collectLeaf(player, leaf, deferSnapshot, collectionBatch)
 			LeafType = leaf.LeafType,
 			BagAmount = addedAmount,
 			DisplayValue = leaf.BagValue * leafValueMultiplier,
+			WorldPosition = leaf.BoundingCFrame.Position,
 		}
 		if collectionBatch then
 			collectionBatch.AddedAmount += addedAmount
@@ -3260,8 +3467,8 @@ function LeafService:_completeArea(yard, areaState)
 	if #remainingLeafIds > 0 then
 		self:_sendDelta(yard, { Kind = "Remove", LeafIds = remainingLeafIds })
 	end
-	local ownerState = self.PlayerDataService:GetState(yard.Owner)
-	if ownerState then
+	local ownerState = yard.Owner and self.PlayerDataService:GetState(yard.Owner) or nil
+	if ownerState and yard.IsCoop ~= true then
 		ownerState.YardProgress.Areas[areaState.AreaId] = { ClearedRatio = 1 }
 		self.PlayerDataService:QueuePersistentSave(yard.Owner)
 	end
@@ -3271,8 +3478,23 @@ function LeafService:_completeArea(yard, areaState)
 			warn("Area-completed handler failed: " .. tostring(message))
 		end
 	end
-	for _, member in self.YardService:GetMembers(yard.Owner) do
+	for _, member in self:_getYardMembers(yard) do
 		self.Remotes.AreaCompletionNotice:FireClient(member, areaState.AreaId, nil)
+	end
+	if yard.IsCoop == true then
+		local areaNumber = tonumber(string.match(areaState.AreaId, "^Area_(%d+)$"))
+		if areaNumber and areaNumber < 8 then
+			yard.HighestUnlockedAreaNumber = math.max(yard.HighestUnlockedAreaNumber or 1, areaNumber + 1)
+			local nextAreaId = string.format("Area_%02d", areaNumber + 1)
+			for _, member in self:_getYardMembers(yard) do
+				local memberState = self.PlayerDataService:GetState(member)
+				if memberState then
+					memberState.UnlockedAreas[nextAreaId] = true
+					memberState.YardProgress.UnlockedAreas[nextAreaId] = true
+					self.PlayerDataService:PushSnapshot(member)
+				end
+			end
+		end
 	end
 	-- Area completion and a near-simultaneous door touch must share the same
 	-- reconciliation queue. This keeps preview promotion/removal idempotent and
@@ -3284,8 +3506,16 @@ function LeafService:GenerateNextAreaForUnlock(playerOrAreaId, maybeAreaId)
 	local player = typeof(playerOrAreaId) == "Instance" and playerOrAreaId or nil
 	local areaId = player and maybeAreaId or playerOrAreaId
 	local owner = player and self.YardService:GetActiveOwner(player) or nil
-	local yard = owner and self.Yards[owner] or nil
+	local yard = if self.IsCoop then self.CoopYard else owner and self.Yards[owner] or nil
 	if not yard or type(areaId) ~= "string" then return false end
+	if yard.IsCoop == true then
+		local areaNumber = tonumber(string.match(areaId, "^Area_(%d+)$"))
+		if not areaNumber or areaNumber < 1 or areaNumber > 8 then
+			return false
+		end
+		yard.HighestUnlockedAreaNumber = math.max(yard.HighestUnlockedAreaNumber or 1, areaNumber)
+		return self:_queueProgressionReconcile(yard)
+	end
 	local ownerState = self.PlayerDataService:GetState(owner)
 	if not ownerState or ownerState.UnlockedAreas[areaId] ~= true then
 		return false
@@ -3417,6 +3647,31 @@ function LeafService:AddInstantRecycleCompletedHandler(handler)
 	if handler then
 		table.insert(self.InstantRecycleCompletedHandlers, handler)
 	end
+end
+
+function LeafService:SetCoopGameplayEnabled(enabled)
+	if not self.IsCoop then
+		return false
+	end
+	self.CoopGameplayEnabled = enabled == true
+	if not self.CoopGameplayEnabled then
+		for player in activePickupPlayers do
+			activePickupPlayers[player] = nil
+			self:ClearHarvestAim(player)
+			if self.ToolActionService then
+				self.ToolActionService:StopPlayer(player)
+			end
+		end
+	end
+	return true
+end
+
+function LeafService:SetCoopDifficulty(difficulty)
+	if not self.IsCoop or self.CoopYard then
+		return false
+	end
+	self.CoopDifficulty = CoopMatchConfig.NormalizeDifficulty(difficulty)
+	return true
 end
 
 return LeafService

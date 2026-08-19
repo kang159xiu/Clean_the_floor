@@ -5,6 +5,7 @@ local Workspace = game:GetService("Workspace")
 
 local CoinFormat = require(ReplicatedStorage.Shared.CoinFormat)
 local LeafConfig = require(ReplicatedStorage.Shared.Config.LeafConfig)
+local CoopMatchConfig = require(ReplicatedStorage.Shared.Config.CoopMatchConfig)
 local LostItemConfig = require(ReplicatedStorage.Shared.Config.LostItemConfig)
 local RegionConfig = require(ReplicatedStorage.Shared.Config.RegionConfig)
 local ToolConfig = require(ReplicatedStorage.Shared.Config.ToolConfig)
@@ -133,7 +134,7 @@ function LostItemService:_ensureAreaSession(player, areaId, allowCompleted)
 	if existing then
 		return existing, false, false
 	end
-	local collectedLeafCount, totalLeafCount = self.LeafService:GetLeafCounts(player, areaId)
+	local _, totalLeafCount = self.LeafService:GetLeafCounts(player, areaId)
 	local areaSession = {
 		AreaId = areaId,
 		SpawnCount = 0,
@@ -142,9 +143,6 @@ function LostItemService:_ensureAreaSession(player, areaId, allowCompleted)
 		FoundItems = {},
 		CountedSpawnIds = {},
 		NextSpawnSerial = 1,
-		ProcessedCheckpointCounts = {
-			Progression = math.floor(math.max(0, collectedLeafCount) / LUCKY_BOX_LEAF_INTERVAL),
-		},
 	}
 	yardSession.Areas[areaId] = areaSession
 	return areaSession, true, false
@@ -578,7 +576,7 @@ function LostItemService:_spawnCheckpointBox(
 	return true
 end
 
-function LostItemService:_processLuckyBoxCheckpoints(
+function LostItemService:_trySpawnCheckpointBox(
 	player,
 	areaSession,
 	collectedLeafCount,
@@ -589,25 +587,20 @@ function LostItemService:_processLuckyBoxCheckpoints(
 		return false
 	end
 	local normalizedCollectedCount = math.max(0, math.floor(tonumber(collectedLeafCount) or 0))
-	local checkpointCount = math.floor(normalizedCollectedCount / LUCKY_BOX_LEAF_INTERVAL)
-	local processedCount = math.max(
-		0,
-		math.floor(tonumber(areaSession.ProcessedCheckpointCounts[streamKey]) or 0)
-	)
-	local spawnedAny = false
-	for checkpointIndex = processedCount + 1, checkpointCount do
-		areaSession.ProcessedCheckpointCounts[streamKey] = checkpointIndex
-		if self.Random:NextNumber() <= LUCKY_BOX_SPAWN_CHANCE then
-			spawnedAny = self:_spawnCheckpointBox(
-				player,
-				areaSession,
-				collectedPosition,
-				streamKey,
-				checkpointIndex
-			) or spawnedAny
-		end
+	if normalizedCollectedCount == 0 or normalizedCollectedCount % LUCKY_BOX_LEAF_INTERVAL ~= 0 then
+		return false
 	end
-	return spawnedAny
+	if self.Random:NextNumber() > LUCKY_BOX_SPAWN_CHANCE then
+		return false
+	end
+	local checkpointIndex = math.floor(normalizedCollectedCount / LUCKY_BOX_LEAF_INTERVAL)
+	return self:_spawnCheckpointBox(
+		player,
+		areaSession,
+		collectedPosition,
+		streamKey,
+		checkpointIndex
+	)
 end
 
 function LostItemService:OnTeamLeafRemoved(
@@ -629,7 +622,7 @@ function LostItemService:OnTeamLeafRemoved(
 	end
 	local playerSession = self:_ensurePlayerSession(influencingPlayer)
 	playerSession.LastCollectedPositions[areaId] = collectedPosition
-	local areaSession, created = self:_ensureAreaSession(influencingPlayer, areaId, true)
+	local areaSession = self:_ensureAreaSession(influencingPlayer, areaId, true)
 	if not areaSession then
 		return
 	end
@@ -638,16 +631,7 @@ function LostItemService:OnTeamLeafRemoved(
 	local streamKey = if isResetCoin
 		then "Reset:" .. tostring(math.max(0, math.floor(tonumber(collectionContext.ResetRunSerial) or 0)))
 		else "Progression"
-	if areaSession.ProcessedCheckpointCounts[streamKey] == nil then
-		areaSession.ProcessedCheckpointCounts[streamKey] = if isResetCoin
-			then 0
-			else math.floor(math.max(0, collectedLeafCount - 1) / LUCKY_BOX_LEAF_INTERVAL)
-	elseif created and not isResetCoin then
-		areaSession.ProcessedCheckpointCounts.Progression = math.floor(
-			math.max(0, collectedLeafCount - 1) / LUCKY_BOX_LEAF_INTERVAL
-		)
-	end
-	local spawned = self:_processLuckyBoxCheckpoints(
+	local spawned = self:_trySpawnCheckpointBox(
 		influencingPlayer,
 		areaSession,
 		collectedLeafCount,
@@ -913,7 +897,7 @@ function LostItemService:_broadcastReveal(player, payload)
 				and math.floor(tonumber(recipientState.ActiveYardOwnerUserId) or recipient.UserId)
 			local recipientCharacter = recipient.Character
 			local recipientRoot = recipientCharacter and recipientCharacter:FindFirstChild("HumanoidRootPart")
-			shouldSend = recipientYardOwnerUserId == openerYardOwnerUserId
+			shouldSend = (CoopMatchConfig.IsCoop() or recipientYardOwnerUserId == openerYardOwnerUserId)
 				and recipientRoot ~= nil
 				and recipientRoot:IsA("BasePart")
 				and (recipientRoot.Position - openerRoot.Position).Magnitude <= NEARBY_REVEAL_RADIUS

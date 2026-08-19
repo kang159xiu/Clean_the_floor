@@ -16,7 +16,7 @@
 | `platform-state` | [核心启动与状态同步](01_PLATFORM_STATE.md) | Active |
 | `persistence-reset` | [存档、迁移、保存与清档](02_PERSISTENCE_RESET.md) | Active |
 | `area-progression-rebirth` | [区域推进、门、空气墙与重生](03_AREA_PROGRESSION_REBIRTH.md) | Active |
-| `yards-visiting` | [庭院访问、邀请与返回](04_YARDS_VISITING.md) | Active |
+| `yards-visiting` | [个人庭院、官方邀请与返回出生点](04_YARDS_VISITING.md) | Active |
 | `leaves-cleaning` | [叶子生成、Streaming显示与清扫](05_LEAVES_CLEANING.md) | Active |
 | `tools-upgrades` | [工具、Automatic与升级](06_TOOLS_UPGRADES.md) | Active |
 | `bags-capacity` | [背包、容量扩展与角色外观](07_BAGS_CAPACITY.md) | Active |
@@ -28,6 +28,7 @@
 | `coin-flip` | [抛硬币](13_COIN_FLIP.md) | Active |
 | `community-friends` | [社区与好友奖励](14_COMMUNITY_FRIENDS.md) | Active |
 | `leaderboards-analytics` | [排行榜与分析](15_LEADERBOARDS_ANALYTICS.md) | Active |
+| `coop-matchmaking` | [四人合作匹配与副本](16_COOP_MATCHMAKING.md) | Active |
 
 暂停、移除和只保留兼容数据的系统见[历史功能](archive/README.md)。
 

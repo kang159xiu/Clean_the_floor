@@ -50,12 +50,21 @@ function LobbyReturnController:Init(remotes, toolController, hudController)
 
 	local gameHUD = Players.LocalPlayer:WaitForChild("PlayerGui"):WaitForChild("GameHUD")
 	local returnFrame = gameHUD:FindFirstChild("fanhui")
+	local coopReturnButton = returnFrame and returnFrame:FindFirstChild("Return")
+	local coopReturnConfirmation = gameHUD:FindFirstChild("fanhuidating")
+	if coopReturnButton and coopReturnButton:IsA("GuiObject") then
+		coopReturnButton.Visible = false
+	end
+	if coopReturnConfirmation and coopReturnConfirmation:IsA("GuiObject") then
+		coopReturnConfirmation.Visible = false
+	end
 	local button = returnFrame and returnFrame:FindFirstChild("Lobby")
 	if not returnFrame or not returnFrame:IsA("GuiObject") or not button or not button:IsA("TextButton") then
 		warn("GameHUD.fanhui.Lobby must be a TextButton; return-to-spawn button is disabled")
 		return
 	end
 	self.Button = button
+	self.Button.Visible = true
 	self:_refreshButton()
 	self.Button.Activated:Connect(function()
 		self:_requestReturn()
